@@ -1,6 +1,6 @@
 """
 KRAKEN SWING BOT V4 - ADVANCED AI SYSTEM
-Integración completa de:
+Full integration of:
 - V3: Multi-Asset + ML + Adaptive Regime + Correlation
 - V4: Sentiment Analysis + On-Chain + Ensemble + RL Position Sizing
 """
@@ -44,7 +44,7 @@ def load_env_file(path: str = ".env") -> None:
 load_env_file()
 
 # ═══════════════════════════════════════════════════════════════════════════
-#                    IMPORTAR MÓDULOS V4
+#                    IMPORT V4 MODULES
 # ═══════════════════════════════════════════════════════════════════════════
 
 try:
@@ -90,7 +90,7 @@ except ImportError:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#                          CONFIGURACIÓN V4
+#                          V4 CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════
 
 @dataclass
@@ -143,13 +143,15 @@ class Config:
         TradingPair('XRP-USD', 'XRPUSD', 10.0, 0.25),
     ]
     
-    MAX_CORRELATION = float(os.getenv('MAX_CORRELATION', '0.7'))  # ← Debe tener 4 espacios
-    MAX_POSITIONS = int(os.getenv('MAX_POSITIONS', '1'))  # ← Debe tener 4 espacios
+    MAX_CORRELATION = float(os.getenv('MAX_CORRELATION', '0.7'))
+    MAX_POSITIONS = int(os.getenv('MAX_POSITIONS', '1'))
     
     # ══════════════════ Trading ══════════════════
     LEVERAGE = int(os.getenv('LEVERAGE', '3'))
     MIN_BALANCE = float(os.getenv('MIN_BALANCE', '1.0'))
     MARGIN_SAFETY_FACTOR = 1.5
+    # Enter with post-only LIMIT (maker) orders to pay the lower maker fee.
+    USE_MAKER_ORDERS = os.getenv('USE_MAKER_ORDERS', 'false').lower() == 'true'
     
     # ══════════════════ Risk ══════════════════
     BASE_STOP_LOSS = float(os.getenv('STOP_LOSS_PCT', '4.0'))
@@ -171,7 +173,7 @@ class Config:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#                    KRAKEN CLIENT (del V3)
+#                    KRAKEN CLIENT (from V3)
 # ═══════════════════════════════════════════════════════════════════════════
 
 class KrakenClient:
@@ -280,13 +282,26 @@ class KrakenClient:
             raise
     
     def place_order(self, pair: str, order_type: str, volume: float, 
-                   leverage: int = None, reduce_only: bool = False) -> dict:
+                   leverage: int = None, reduce_only: bool = False,
+                   ordertype: str = 'market', price: float = None,
+                   post_only: bool = False) -> dict:
+        # ordertype 'market' fills immediately (taker fee). 'limit' rests on the
+        # order book at `price` and, if it fills, pays the cheaper maker fee.
         data = {
             'pair': pair,
             'type': order_type,
-            'ordertype': 'market',
+            'ordertype': ordertype,
             'volume': str(round(volume, 8))
         }
+
+        # A limit order must say what price to rest at.
+        if ordertype == 'limit' and price is not None:
+            data['price'] = str(price)
+
+        # 'post' = post-only: Kraken cancels the order rather than let it cross
+        # the spread, guaranteeing we are the maker (never pay the taker fee).
+        if post_only:
+            data['oflags'] = 'post'
         
         if leverage and leverage > 1:
             data['leverage'] = str(leverage)
@@ -294,6 +309,32 @@ class KrakenClient:
                 data['reduce_only'] = 'true'
         
         return self._request('/0/private/AddOrder', data=data, private=True)
+
+    def get_open_orders(self) -> dict:
+        """Return resting (still unfilled) orders, keyed by order id."""
+        result = self._request('/0/private/OpenOrders', private=True)
+        return result.get('open', {}) if result else {}
+
+    def cancel_all_orders(self) -> dict:
+        """
+        Cancel every resting order. Called at the start of each run so a maker
+        limit entry that did not fill last cycle cannot fill later at a price we
+        no longer want.
+        """
+        return self._request('/0/private/CancelAll', private=True)
+
+    def get_pair_decimals(self, pair: str) -> int:
+        """
+        Ask Kraken how many decimal places a pair's price allows. We must round
+        limit prices to this precision or Kraken rejects the order.
+        """
+        try:
+            result = self._request('/0/public/AssetPairs', data={'pair': pair})
+            for _, info in result.items():
+                return int(info.get('pair_decimals', 2))
+        except Exception:
+            pass
+        return 2
     
     def close_position(self, pair: str, position_type: str, volume: float, 
                       leverage: int = None) -> dict:
@@ -760,17 +801,17 @@ class TradingBotV4:
             self.rl_calculator = PositionSizeCalculator(self.rl_sizer)
             print("   ✓ RL Position Sizing enabled")
             
-            # ✅ NUEVO: Crear archivo vacío si no existe
+            # Create empty file if it does not exist
             self._initialize_rl_state_file()
         else:
             self.rl_sizer = None
             self.rl_calculator = None
         
-        # Historial de trades (para RL)
+        # Trade history (for RL)
         self.trades_history = []
     
     def _initialize_rl_state_file(self):
-        """✅ NUEVO: Inicializa archivo RL state si no existe"""
+        """Initialize RL state file if it does not exist."""
         try:
             if not os.path.exists(self.config.RL_STATE_FILE):
                 with open(self.config.RL_STATE_FILE, 'w') as f:
@@ -803,7 +844,7 @@ class TradingBotV4:
                                    swing_signal: Tuple) -> Dict:
         """
         ═══════════════════════════════════════════════════════════════
-        ANÁLISIS MULTI-LAYER V4
+        MULTI-LAYER V4 ANALYSIS
         ═══════════════════════════════════════════════════════════════
         """
         symbol = pair.yf_symbol
@@ -914,7 +955,7 @@ class TradingBotV4:
                     'votes': {str(k): str(v) for k, v in ensemble_decision.votes.items()}
                 }
                 
-                # Verificar consenso y confianza
+                # Check consensus and confidence
                 if (ensemble_decision.final_signal != signal or
                     ensemble_decision.consensus_level < self.config.MIN_ENSEMBLE_CONSENSUS or
                     ensemble_decision.confidence < self.config.MIN_ENSEMBLE_CONFIDENCE):
@@ -941,7 +982,7 @@ class TradingBotV4:
         else:
             result['confidence'] = swing_confidence
         
-        # ═══════════════ DECISIÓN FINAL ═══════════════
+        # ═══════════════ FINAL DECISION ═══════════════
         
         result['can_trade'] = True
         result['final_signal'] = signal
@@ -958,26 +999,26 @@ class TradingBotV4:
                                available_margin: float) -> Tuple[float, int]:
         """
         ═══════════════════════════════════════════════════════════════
-        LAYER 4: RL POSITION SIZING (o tradicional)
+        LAYER 4: RL POSITION SIZING (or traditional)
         ═══════════════════════════════════════════════════════════════
         """
         
         if self.rl_calculator:
             print(f"\n   🤖 Layer 4: RL Position Sizing")
             try:
-                # Obtener posiciones abiertas
+                # Get open positions
                 positions = self.kraken.get_open_positions()
                 open_positions_count = len(positions)
                 
-                # Calcular tamaño óptimo con RL
+                # Calculate optimal size with RL
                 capital, leverage = self.rl_calculator.get_optimal_size(
                     data=data,
                     signal_confidence=analysis_result['confidence'],
                     available_capital=available_margin,
                     base_leverage=self.config.LEVERAGE,
                     open_positions=open_positions_count,
-                    recent_trades=self.trades_history[-20:],  # Últimos 20 trades
-                    training=True  # Modo entrenamiento
+                    recent_trades=self.trades_history[-20:],  # Last 20 trades
+                    training=True  # Training mode
                 )
                 
                 analysis_result['v4_data']['rl_sizing'] = {
@@ -992,7 +1033,7 @@ class TradingBotV4:
                 print(f"   ⚠️ RL sizing error: {e}")
                 traceback.print_exc()
         
-        # Fallback: sizing tradicional
+        # Fallback: traditional sizing
         print(f"\n   💰 Standard position sizing")
         allocation = pair.allocation
         capital = available_margin * allocation
@@ -1007,15 +1048,15 @@ class TradingBotV4:
                      current_price: float,
                      capital: float,
                      leverage: int):
-        """Abre posición con análisis V4 completo."""
+        """Open a position with full V4 analysis."""
         
         signal = analysis_result['final_signal']
         confidence = analysis_result['confidence']
         
-        # Calcular volumen
+        # Calculate volume
         volume = (capital * leverage) / current_price
         
-        # Verificar volumen mínimo
+        # Check minimum volume
         if volume < pair.min_volume:
             print(f"   ⚠️ Volume {volume:.8f} < minimum {pair.min_volume}")
             return
@@ -1030,18 +1071,35 @@ class TradingBotV4:
             
             if not self.config.DRY_RUN:
                 order_type = 'buy' if signal == 'BUY' else 'sell'
+
+                if self.config.USE_MAKER_ORDERS:
+                    # Maker (post-only limit) entry pays the lower fee. It may
+                    # not fill; if so we simply re-decide next cycle (stale
+                    # orders are cancelled at the start of run()).
+                    decimals = self.kraken.get_pair_decimals(pair.kraken_pair)
+                    limit_price = round(current_price, decimals)
+                    result = self.kraken.place_order(
+                        pair=pair.kraken_pair,
+                        order_type=order_type,
+                        volume=volume,
+                        leverage=leverage,
+                        reduce_only=False,
+                        ordertype='limit',
+                        price=limit_price,
+                        post_only=True
+                    )
+                    print(f"   ✓ Maker limit order placed @ {limit_price}: {result}")
+                else:
+                    result = self.kraken.place_order(
+                        pair=pair.kraken_pair,
+                        order_type=order_type,
+                        volume=volume,
+                        leverage=leverage,
+                        reduce_only=False
+                    )
+                    print(f"   ✓ Executed: {result}")
                 
-                result = self.kraken.place_order(
-                    pair=pair.kraken_pair,
-                    order_type=order_type,
-                    volume=volume,
-                    leverage=leverage,
-                    reduce_only=False
-                )
-                
-                print(f"   ✓ Executed: {result}")
-                
-                # Guardar trade para RL
+                # Save trade for RL
                 trade_record = {
                     'symbol': pair.yf_symbol,
                     'entry_price': current_price,
@@ -1059,7 +1117,7 @@ class TradingBotV4:
             else:
                 print(f"   🧪 [SIMULATION]")
             
-            # Notificación V4
+            # V4 notification
             self._send_v4_notification(
                 pair, signal, current_price, volume, leverage, 
                 confidence, analysis_result['reasons'], analysis_result.get('v4_data', {})
@@ -1072,11 +1130,11 @@ class TradingBotV4:
     
     def _send_v4_notification(self, pair, signal, price, volume, 
                              leverage, confidence, reasons, v4_data):
-        """Notificación Telegram con detalles V4."""
+        """Telegram notification with V4 details."""
         
         reasons_text = "\n".join([f"• {r}" for r in reasons])
         
-        # Extraer datos V4 para mostrar
+        # Extract V4 data for display
         v4_summary = []
         
         if 'sentiment' in v4_data:
@@ -1124,7 +1182,7 @@ class TradingBotV4:
     def run(self):
         """
         ═══════════════════════════════════════════════════════════════
-        LOOP PRINCIPAL V4
+        MAIN V4 LOOP
         ═══════════════════════════════════════════════════════════════
         """
         print("\n" + "="*70)
@@ -1134,7 +1192,7 @@ class TradingBotV4:
         print(f"Mode: {'🧪 SIMULATION' if self.config.DRY_RUN else '💰 LIVE TRADING'}")
         print(f"ML Validation: {'✅' if self.config.USE_ML_VALIDATION else '❌'}")
         
-        # Mostrar features V4 activas
+        # Show active V4 features
         print("\n🤖 AI Features V4:")
         print(f"   Sentiment Analysis: {'✅' if self.sentiment_analyzer else '❌'}")
         print(f"   On-Chain Metrics: {'✅' if self.onchain_analyzer else '❌'}")
@@ -1143,7 +1201,7 @@ class TradingBotV4:
         print("="*70)
         
         try:
-            # Obtener balance y margen
+            # Get balance and margin
             balance, currency = self.kraken.get_balance()
             available_margin = self.kraken.get_available_margin()
             
@@ -1156,6 +1214,18 @@ class TradingBotV4:
             
             usable_margin = available_margin / self.config.MARGIN_SAFETY_FACTOR
             print(f"   Usable margin: {usable_margin:.2f} {currency}")
+
+            # Clear leftover maker (limit) entries from the previous cycle so
+            # they cannot fill later at a stale price. Exits are never limit
+            # orders, so this only cancels unfilled entries.
+            if not self.config.DRY_RUN and self.config.USE_MAKER_ORDERS:
+                try:
+                    open_orders = self.kraken.get_open_orders()
+                    if open_orders:
+                        self.kraken.cancel_all_orders()
+                        print(f"   🧹 Cancelled {len(open_orders)} stale order(s)")
+                except Exception as e:
+                    print(f"   ⚠️ Could not cancel stale orders: {e}")
             
             print("\n📊 Downloading multi-asset data...")
             market_data = {}
@@ -1171,7 +1241,7 @@ class TradingBotV4:
                 print("❌ Could not download market data")
                 return
             
-            # Calcular correlaciones
+            # Calculate correlations
             print("\n🔗 Calculating correlations...")
             corr_matrix = CorrelationManager.calculate_correlation_matrix(
                 market_data, lookback=30
@@ -1181,7 +1251,7 @@ class TradingBotV4:
                 print("   Correlation matrix:")
                 print(corr_matrix.round(2))
             
-            # Verificar posiciones abiertas
+            # Check open positions
             print("\n📊 Checking OPEN positions...")
             positions = self.kraken.get_open_positions()
             
@@ -1196,7 +1266,7 @@ class TradingBotV4:
                     pos_margin = float(pos_data.get('margin', 0))
                     total_margin_used += pos_margin
                     
-                    # Encontrar trading pair
+                    # Find trading pair
                     trading_pair = next(
                         (tp for tp in self.config.TRADING_PAIRS if tp.kraken_pair == pair_key),
                         None
@@ -1209,7 +1279,7 @@ class TradingBotV4:
                     data = market_data[trading_pair.yf_symbol]
                     current_price = float(data['Close'].iloc[-1])
                     
-                    # Detectar régimen
+                    # Detect regime
                     regime = RegimeDetector.detect(data, self.config.REGIME_LOOKBACK)
                     regime_params = RegimeDetector.get_adapted_params(
                         regime, 
@@ -1221,7 +1291,7 @@ class TradingBotV4:
                     print(f"\n   {trading_pair.yf_symbol} ({pair_key}) - Regime: {regime}")
                     print(f"   Margin used: {pos_margin:.2f} {currency}")
                     
-                    # Verificar si cerrar
+                    # Check whether to close
                     should_close, reason = self.position_mgr.check_position(
                         pair_key, pos_data, current_price, regime_params
                     )
@@ -1235,7 +1305,7 @@ class TradingBotV4:
                         total_margin_used -= pos_margin
                         valid_position_count -= 1
                         
-                        # Actualizar RL si está activo
+                        # Update RL if active
                         if self.rl_sizer:
                             self._update_rl_on_close(
                                 trading_pair.yf_symbol, 
@@ -1278,7 +1348,7 @@ class TradingBotV4:
                 data = market_data[pair.yf_symbol]
                 current_price = float(data['Close'].iloc[-1])
                 
-                # Detectar swing signal (V3)
+                # Detect swing signal (V3)
                 detector = SwingDetectorV3(
                     data, 
                     volume_filter=self.config.USE_VOLUME_FILTER,
@@ -1294,7 +1364,7 @@ class TradingBotV4:
                 print(f"\n   🎯 {pair.yf_symbol}: {signal} signal detected")
                 
                 # ═══════════════════════════════════════════════════
-                #       ANÁLISIS COMPLETO V4
+                #       FULL V4 ANALYSIS
                 # ═══════════════════════════════════════════════════
                 
                 analysis = self.analyze_trading_opportunity(
@@ -1305,7 +1375,7 @@ class TradingBotV4:
                     print(f"   ❌ Rejected by V4 analysis")
                     continue
                 
-                # Verificar correlación
+                # Check correlation
                 can_open, max_corr = CorrelationManager.check_position_correlation(
                     open_symbols, pair.yf_symbol, corr_matrix, self.config.MAX_CORRELATION
                 )
@@ -1314,7 +1384,7 @@ class TradingBotV4:
                     print(f"   ⚠️ Rejected by correlation ({max_corr:.2f})")
                     continue
                 
-                # Señal validada
+                # Validated signal
                 validated_signals.append({
                     'pair': pair,
                     'data': data,
@@ -1328,10 +1398,10 @@ class TradingBotV4:
                 print("\nℹ️ No valid signals after V4 analysis")
                 return
             
-            # Ordenar por confianza
+            # Sort by confidence
             validated_signals.sort(key=lambda x: x['analysis']['confidence'], reverse=True)
             
-            # Abrir posiciones
+            # Open positions
             positions_to_open = min(
                 len(validated_signals), 
                 self.config.MAX_POSITIONS - valid_position_count
@@ -1342,7 +1412,7 @@ class TradingBotV4:
             remaining_margin = margin_for_new
             
             for sig in validated_signals[:positions_to_open]:
-                # Calcular tamaño ANTES de abrir
+                # Calculate size BEFORE opening
                 capital, leverage = self.calculate_position_size(
                     sig['pair'],
                     sig['data'],
@@ -1350,7 +1420,7 @@ class TradingBotV4:
                     remaining_margin
                 )
                 
-                # Abrir con valores ya calculados
+                # Open with pre-calculated values
                 self.open_position(
                     sig['pair'],
                     sig['analysis'],
@@ -1360,7 +1430,7 @@ class TradingBotV4:
                     leverage
                 )
                 
-                # Restar margen usado para siguiente posición
+                # Subtract margin used for next position
                 margin_used = capital
                 remaining_margin = max(0, remaining_margin - margin_used)
                 
@@ -1368,7 +1438,7 @@ class TradingBotV4:
                     print(f"   ⚠️ Insufficient remaining margin, stopping opens")
                     break
             
-            # ✅ CORREGIDO: Guardar siempre (no solo en modo REAL)
+            # Always save (not only in LIVE mode)
             if self.rl_sizer:
                 self.rl_sizer.save_state()
                 print(f"\n💾 RL state saved")
@@ -1385,13 +1455,13 @@ class TradingBotV4:
     def _update_rl_on_close(self, symbol: str, pos_data: dict, 
                            exit_price: float, reason: str):
         """
-        Actualiza RL agent cuando se cierra una posición.
+        Update RL agent when a position is closed.
         """
         if not self.rl_sizer:
             return
         
         try:
-            # Calcular PnL
+            # Calculate PnL
             entry_price = float(pos_data.get('cost', 0)) / float(pos_data.get('vol', 1))
             leverage = float(pos_data.get('leverage', 1))
             pos_type = pos_data.get('type', 'long')
@@ -1401,7 +1471,7 @@ class TradingBotV4:
             else:
                 pnl_pct = ((entry_price - exit_price) / entry_price) * 100 * leverage
             
-            # Encontrar trade en historial
+            # Find trade in history
             matching_trades = [
                 t for t in self.trades_history 
                 if t['symbol'] == symbol and not t.get('closed', False)
@@ -1410,15 +1480,15 @@ class TradingBotV4:
             if not matching_trades:
                 return
             
-            trade = matching_trades[-1]  # Último trade de este símbolo
-            
-            # Marcar como cerrado
+            trade = matching_trades[-1]  # Latest trade for this symbol
+
+            # Mark as closed
             trade['closed'] = True
             trade['exit_price'] = exit_price
             trade['pnl_pct'] = pnl_pct
             trade['exit_reason'] = reason
             
-            # Calcular reward
+            # Calculate reward
             trade_result = {
                 'closed': True,
                 'pnl_pct': pnl_pct,
@@ -1438,7 +1508,7 @@ class TradingBotV4:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def main():
-    """Entry point del bot V4."""
+    """V4 bot entry point."""
     
     print("\n" + "╔"*70)
     print("🚀 INITIALIZING KRAKEN TRADING BOT V4")
@@ -1446,7 +1516,7 @@ def main():
     
     config = Config()
     
-    # Verificar credenciales básicas
+    # Verify basic credentials
     if not config.KRAKEN_API_KEY or not config.KRAKEN_API_SECRET:
         print("❌ Missing Kraken credentials")
         return
@@ -1459,7 +1529,7 @@ def main():
         print("   KRAKEN_API_SECRET=paste_full_key_here")
         return
     
-    # Verificar APIs V4
+    # Verify V4 APIs
     missing_apis = []
     
     if config.USE_SENTIMENT_ANALYSIS and not config.CRYPTOCOMPARE_API_KEY and not config.NEWSDATA_API_KEY:
@@ -1474,7 +1544,7 @@ def main():
             print(f"   - {api}")
         print("\nThe bot will run without these features.")
     
-    # Verificar módulos V4
+    # Verify V4 modules
     missing_modules = []
     
     if config.USE_SENTIMENT_ANALYSIS and not SENTIMENT_AVAILABLE:
@@ -1497,7 +1567,7 @@ def main():
     
     print("\n" + "╔"*70)
     
-    # Inicializar y ejecutar bot
+    # Initialize and run bot
     bot = TradingBotV4(config)
     bot.run()
     

@@ -21,7 +21,7 @@ on:
       use_ensemble:
         description: 'Use Multi-Strategy Ensemble'
         required: false
-        default: 'false'
+        default: 'true'
       use_rl:
         description: 'Use RL Position Sizing'
         required: false
@@ -78,7 +78,8 @@ jobs:
         USE_ONCHAIN_ANALYSIS: ${{ github.event.inputs.use_onchain || 'false' }}
         MIN_ONCHAIN_STRENGTH: '0.5'
 
-        USE_ENSEMBLE_SYSTEM: ${{ github.event.inputs.use_ensemble || 'false' }}
+        # Ensemble ON = require the 4-strategy vote to confirm entries (trades less).
+        USE_ENSEMBLE_SYSTEM: ${{ github.event.inputs.use_ensemble || 'true' }}
         MIN_ENSEMBLE_CONSENSUS: '0.6'
         MIN_ENSEMBLE_CONFIDENCE: '0.6'
 
@@ -90,8 +91,12 @@ jobs:
 
         MAX_CORRELATION: '0.7'
         MAX_POSITIONS: '1'
-        LEVERAGE: '3'
+        # Leverage 2 (was 3): lower fee drag + blow-up risk. Do NOT use 1 with
+        # margin — Kraken 1x = spot and cannot open SHORT positions.
+        LEVERAGE: '2'
         MIN_BALANCE: '1.0'
+        # Maker (post-only limit) entries = lower fee. Exits stay market.
+        USE_MAKER_ORDERS: 'true'
 
         STOP_LOSS_PCT: '4.0'
         TAKE_PROFIT_PCT: '8.0'

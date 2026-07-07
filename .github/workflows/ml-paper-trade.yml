@@ -1,0 +1,66 @@
+name: ML Strategy Paper Trading
+
+# Paper-trades the validated longer-horizon ML strategy on live data.
+# It places NO real orders. It only simulates and sends Telegram updates,
+# so we can confirm the backtested edge holds forward before risking money.
+
+on:
+  schedule:
+    - cron: '0 * * * *'   # hourly (data is 1h; holds are ~2 days)
+  workflow_dispatch:
+
+jobs:
+  paper-trade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        pip install --upgrade pip
+        pip install -r requirements.txt
+
+    # Persist the paper account (positions + equity) between runs, exactly
+    # like the RL state cache the main bot uses.
+    - name: Load paper state cache
+      continue-on-error: true
+      uses: actions/cache@v4
+      with:
+        path: ml_paper_state.json
+        key: ml-paper-state-${{ github.run_number }}
+        restore-keys: |
+          ml-paper-state-
+
+    - name: Run ML paper trader
+      env:
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      run: |
+        echo "ML PAPER TRADING (no real money)"
+        echo "Date: $(date)"
+        python ml_paper_trade.py
+
+    - name: Save paper state cache
+      if: always()
+      continue-on-error: true
+      uses: actions/cache@v4
+      with:
+        path: ml_paper_state.json
+        key: ml-paper-state-${{ github.run_number }}
+
+    - name: Upload paper state artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ml-paper-state-${{ github.run_number }}
+        path: ml_paper_state.json
+        retention-days: 14
