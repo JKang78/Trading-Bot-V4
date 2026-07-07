@@ -1,0 +1,82 @@
+name: ML Strategy LIVE Trading (real money)
+
+# ⚠️ THIS PLACES REAL ORDERS ON KRAKEN via ml_live_trade.py.
+# Trades the validated longer-horizon ML strategy on XRP/ADA/SOL.
+# To pause it: comment out the schedule below (like the old swing bot).
+
+on:
+  schedule:
+    - cron: '0 * * * *'   # hourly (data is 1h; holds are ~2 days)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry-run (true) = no real orders; false = REAL MONEY'
+        required: false
+        default: 'false'
+
+# Never run two live trades at once (avoids double orders on overlap).
+concurrency:
+  group: ml-live-trade
+  cancel-in-progress: false
+
+jobs:
+  live-trade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        pip install --upgrade pip
+        pip install -r requirements.txt
+
+    # Persist which positions we opened + when to close them.
+    - name: Load live state cache
+      continue-on-error: true
+      uses: actions/cache@v4
+      with:
+        path: ml_live_state.json
+        key: ml-live-state-${{ github.run_number }}
+        restore-keys: |
+          ml-live-state-
+
+    - name: Run ML live trader
+      env:
+        KRAKEN_API_KEY: ${{ secrets.KRAKEN_API_KEY }}
+        KRAKEN_API_SECRET: ${{ secrets.KRAKEN_API_SECRET }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        ML_LIVE_SYMBOLS: 'XRP-USD,ADA-USD,SOL-USD'
+        ML_LIVE_LEVERAGE: '2'
+        ML_LIVE_POSITION_FRACTION: '0.20'
+        ML_LIVE_MAX_OPEN: '3'
+        ML_LIVE_DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+      run: |
+        echo "ML LIVE TRADER"
+        echo "Date: $(date)"
+        python ml_live_trade.py
+
+    - name: Save live state cache
+      if: always()
+      continue-on-error: true
+      uses: actions/cache@v4
+      with:
+        path: ml_live_state.json
+        key: ml-live-state-${{ github.run_number }}
+
+    - name: Upload live state artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ml-live-state-${{ github.run_number }}
+        path: ml_live_state.json
+        retention-days: 30

@@ -1,8 +1,12 @@
 name: Kraken Trading Bot V4
 
+# NOTE: Automatic schedule DISABLED. The real-money ML strategy
+# (ml-live-trade.yml) now trades this Kraken account. Running both on one
+# account causes margin/position conflicts. This old swing bot can still be
+# run manually via "Run workflow" if needed.
 on:
-  schedule:
-    - cron: '*/10 * * * *'
+  # schedule:
+  #   - cron: '*/10 * * * *'
 
   workflow_dispatch:
     inputs:
