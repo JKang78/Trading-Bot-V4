@@ -1,6 +1,6 @@
 """
-SENTIMENT ANALYZER - CryptoCompare + NewsData.io Integration
-Analiza el sentiment de redes sociales y noticias para crypto
+SENTIMENT ANALYZER - Fear & Greed + NewsData.io + optional CryptoCompare
+Analyzes market mood from free and optional paid sources.
 """
 
 import os
@@ -15,10 +15,11 @@ class SentimentScore:
     overall_score: float  # -1 (muy negativo) a +1 (muy positivo)
     news_score: float
     social_score: float
-    newsdata_score: float  # NUEVO: Score de NewsData.io
+    newsdata_score: float
+    fear_greed_score: float  # Free Fear & Greed Index (-1 to +1)
     confidence: float
     timestamp: datetime
-    news_count: int = 0  # NUEVO: Cantidad de noticias analizadas
+    news_count: int = 0
     
     def is_bullish(self, threshold: float = 0.2) -> bool:
         return self.overall_score > threshold
@@ -29,14 +30,15 @@ class SentimentScore:
 
 class SentimentAnalyzer:
     """
-    Integra datos de sentiment de múltiples fuentes:
-    - CryptoCompare API (noticias y social)
-    - NewsData.io API (noticias globales)
+    Combines sentiment from multiple sources:
+    - Fear & Greed Index (free, no API key)
+    - NewsData.io (optional free tier)
+    - CryptoCompare (optional, if you have a key)
     """
     
-    def __init__(self, cryptocompare_api_key: str, newsdata_api_key: Optional[str] = None):
-        self.cryptocompare_key = cryptocompare_api_key
-        self.newsdata_key = newsdata_api_key
+    def __init__(self, cryptocompare_api_key: Optional[str] = None, newsdata_api_key: Optional[str] = None):
+        self.cryptocompare_key = (cryptocompare_api_key or '').strip()
+        self.newsdata_key = (newsdata_api_key or '').strip()
         self.base_url = "https://min-api.cryptocompare.com"
         self.newsdata_url = "https://newsdata.io/api/1/news"
         self.session = requests.Session()
@@ -94,58 +96,82 @@ class SentimentAnalyzer:
             scores = []
             weights = []
             news_count = 0
-            
-            # 1. CryptoCompare News sentiment
-            cc_news_score = self._get_cryptocompare_news_sentiment(clean_symbol)
-            if cc_news_score is not None:
-                scores.append(cc_news_score)
-                weights.append(0.25)  # 25% peso
-            
-            # 2. CryptoCompare Social sentiment
-            social_score = self._get_social_sentiment(clean_symbol)
-            if social_score is not None:
-                scores.append(social_score)
-                weights.append(0.25)  # 25% peso
-            
-            # 3. NewsData.io sentiment (NUEVO)
+            cc_news_score = None
+            social_score = None
             newsdata_score = None
+            fear_greed_score = None
+            
+            # 1. Fear & Greed Index (free, no API key)
+            fear_greed_score = self._get_fear_greed_sentiment()
+            if fear_greed_score is not None:
+                scores.append(fear_greed_score)
+                weights.append(0.40)
+            
+            # 2. NewsData.io (optional)
             if self.newsdata_key:
                 newsdata_score, news_count = self._get_newsdata_sentiment(clean_symbol)
                 if newsdata_score is not None:
                     scores.append(newsdata_score)
-                    weights.append(0.50)  # 50% peso (fuente más importante)
+                    weights.append(0.35)
             
-            # Verificar que tengamos al menos una fuente
+            # 3. CryptoCompare (optional)
+            if self.cryptocompare_key:
+                cc_news_score = self._get_cryptocompare_news_sentiment(clean_symbol)
+                if cc_news_score is not None:
+                    scores.append(cc_news_score)
+                    weights.append(0.15)
+                
+                social_score = self._get_social_sentiment(clean_symbol)
+                if social_score is not None:
+                    scores.append(social_score)
+                    weights.append(0.10)
+            
             if not scores:
                 return None
             
-            # Calculate weighted average
             overall = sum(s * w for s, w in zip(scores, weights)) / sum(weights)
-            
-            # Confidence basada en disponibilidad de datos
-            confidence = len(scores) / 3.0  # 3 fuentes posibles
+            max_sources = 4.0 if self.cryptocompare_key else (2.0 if self.newsdata_key else 1.0)
+            confidence = min(1.0, len(scores) / max_sources)
             
             sentiment = SentimentScore(
                 overall_score=overall,
                 news_score=cc_news_score or 0.0,
                 social_score=social_score or 0.0,
                 newsdata_score=newsdata_score or 0.0,
+                fear_greed_score=fear_greed_score or 0.0,
                 confidence=confidence,
                 timestamp=datetime.now(),
                 news_count=news_count
             )
             
-            # Cache result
             self.cache[cache_key] = sentiment
             
             print(f"   💭 Sentiment {clean_symbol}: Overall={overall:.2f}")
-            print(f"      CC_News={cc_news_score}, Social={social_score}, NewsData={newsdata_score}")
+            print(f"      FearGreed={fear_greed_score}, NewsData={newsdata_score}, CC_News={cc_news_score}, Social={social_score}")
             print(f"      Confidence={confidence:.2f}, News analyzed={news_count}")
             
             return sentiment
             
         except Exception as e:
-            print(f"   ⚠️ Error obteniendo sentiment para {clean_symbol}: {e}")
+            print(f"   ⚠️ Error getting sentiment for {clean_symbol}: {e}")
+            return None
+    
+    def _get_fear_greed_sentiment(self) -> Optional[float]:
+        """Fetch the free Crypto Fear & Greed Index (0-100 mapped to -1..+1)."""
+        try:
+            response = self.session.get(
+                "https://api.alternative.me/fng/?limit=1",
+                timeout=10
+            )
+            response.raise_for_status()
+            data = response.json()
+            value = int(data["data"][0]["value"])
+            classification = data["data"][0].get("value_classification", "")
+            score = (value - 50) / 50.0
+            print(f"   📊 Fear & Greed: {value} ({classification})")
+            return max(-1.0, min(1.0, score))
+        except Exception as e:
+            print(f"   ⚠️ Fear & Greed error: {e}")
             return None
     
     def _get_cryptocompare_news_sentiment(self, symbol: str) -> Optional[float]:
@@ -196,7 +222,7 @@ class SentimentAnalyzer:
             return sum(sentiment_scores) / len(sentiment_scores)
             
         except Exception as e:
-            print(f"   ⚠️ Error en CC news sentiment: {e}")
+            print(f"   ⚠️ CryptoCompare news sentiment error: {e}")
             return None
     
     def _get_newsdata_sentiment(self, symbol: str) -> tuple[Optional[float], int]:
@@ -262,7 +288,7 @@ class SentimentAnalyzer:
             return avg_score, len(sentiment_scores)
             
         except Exception as e:
-            print(f"   ⚠️ Error en NewsData sentiment: {e}")
+            print(f"   ⚠️ NewsData sentiment error: {e}")
             return None, 0
     
     def _calculate_text_sentiment(self, text: str) -> float:
@@ -343,7 +369,7 @@ class SentimentAnalyzer:
             return score
             
         except Exception as e:
-            print(f"   ⚠️ Error en social sentiment: {e}")
+            print(f"   ⚠️ Social sentiment error: {e}")
             return None
     
     def _get_coin_id(self, symbol: str) -> int:

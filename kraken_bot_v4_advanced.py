@@ -10,6 +10,7 @@ import time
 import hmac
 import hashlib
 import base64
+import binascii
 import urllib.parse
 from datetime import datetime, timedelta
 import requests
@@ -20,6 +21,27 @@ from typing import Tuple, Optional, Dict, List
 from dataclasses import dataclass
 import json
 import traceback
+from pathlib import Path
+
+
+def load_env_file(path: str = ".env") -> None:
+    """Load KEY=value pairs from .env into os.environ."""
+    env_path = Path(path)
+    if not env_path.exists():
+        return
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if key:
+            # .env file is the source of truth (fixes empty shell exports)
+            os.environ[key] = value
+
+
+load_env_file()
 
 # ═══════════════════════════════════════════════════════════════════════════
 #                    IMPORTAR MÓDULOS V4
@@ -32,7 +54,7 @@ try:
     )
     SENTIMENT_AVAILABLE = True
 except ImportError:
-    print("⚠️ sentiment_analyzer.py no encontrado")
+    print("⚠️ sentiment_analyzer.py not found")
     SENTIMENT_AVAILABLE = False
 
 try:
@@ -42,7 +64,7 @@ try:
     )
     ONCHAIN_AVAILABLE = True
 except ImportError:
-    print("⚠️ onchain_metrics.py no encontrado")
+    print("⚠️ onchain_metrics.py not found")
     ONCHAIN_AVAILABLE = False
 
 try:
@@ -52,7 +74,7 @@ try:
     )
     ENSEMBLE_AVAILABLE = True
 except ImportError:
-    print("⚠️ ensemble_strategies.py no encontrado")
+    print("⚠️ ensemble_strategies.py not found")
     ENSEMBLE_AVAILABLE = False
 
 try:
@@ -63,7 +85,7 @@ try:
     )
     RL_AVAILABLE = True
 except ImportError:
-    print("⚠️ rl_position_sizing.py no encontrado")
+    print("⚠️ rl_position_sizing.py not found")
     RL_AVAILABLE = False
 
 
@@ -80,11 +102,12 @@ class TradingPair:
 
 class Config:
     # ══════════════════ APIs ══════════════════
-    KRAKEN_API_KEY = os.getenv('KRAKEN_API_KEY', '')
-    KRAKEN_API_SECRET = os.getenv('KRAKEN_API_SECRET', '')
+    KRAKEN_API_KEY = os.getenv('KRAKEN_API_KEY', '').strip()
+    KRAKEN_API_SECRET = os.getenv('KRAKEN_API_SECRET', '').strip()
     KRAKEN_API_URL = 'https://api.kraken.com'
     
     CRYPTOCOMPARE_API_KEY = os.getenv('CRYPTOCOMPARE_API_KEY', '')
+    NEWSDATA_API_KEY = os.getenv('NEWSDATA_API_KEY', '')
     TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
     TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
     
@@ -153,16 +176,25 @@ class Config:
 
 class KrakenClient:
     def __init__(self, api_key: str, api_secret: str, api_url: str):
-        self.api_key = api_key
-        self.api_secret = api_secret
+        self.api_key = api_key.strip()
+        self.api_secret = api_secret.strip()
         self.api_url = api_url
         self.session = requests.Session()
+    
+    def _decode_api_secret(self) -> bytes:
+        """Decode Kraken base64 secret, fixing missing padding if needed."""
+        secret = self.api_secret
+        try:
+            return base64.b64decode(secret, validate=True)
+        except (binascii.Error, ValueError):
+            padded = secret + '=' * (-len(secret) % 4)
+            return base64.b64decode(padded)
     
     def _sign(self, urlpath: str, data: dict) -> str:
         postdata = urllib.parse.urlencode(data)
         encoded = (str(data['nonce']) + postdata).encode()
         message = urlpath.encode() + hashlib.sha256(encoded).digest()
-        signature = hmac.new(base64.b64decode(self.api_secret), message, hashlib.sha512)
+        signature = hmac.new(self._decode_api_secret(), message, hashlib.sha512)
         return base64.b64encode(signature.digest()).decode()
     
     def _request(self, endpoint: str, data: dict = None, private: bool = False) -> dict:
@@ -203,10 +235,10 @@ class KrakenClient:
         try:
             result = self._request('/0/private/TradeBalance', private=True)
             margin_free = float(result.get('mf', 0))
-            print(f"   💰 Margen disponible: {margin_free:.2f} EUR")
+            print(f"   💰 Available margin: {margin_free:.2f} EUR")
             return margin_free
         except Exception as e:
-            print(f"   ⚠️ Error obteniendo margen: {e}")
+            print(f"   ⚠️ Error getting margin: {e}")
             balance, _ = self.get_balance()
             return balance * 0.5
     
@@ -565,6 +597,10 @@ class Telegram:
             
             data = {'chat_id': self.chat_id, 'text': message, 'parse_mode': 'HTML'}
             response = requests.post(f"{self.api_url}/sendMessage", data=data, timeout=10)
+            if not response.ok:
+                # Retry without HTML if Telegram rejects formatting
+                data = {'chat_id': self.chat_id, 'text': message}
+                response = requests.post(f"{self.api_url}/sendMessage", data=data, timeout=10)
             response.raise_for_status()
             return True
         except Exception as e:
@@ -625,8 +661,8 @@ class PositionManagerV3:
     
     def close_position(self, pair: str, pos_type: str, volume: float, 
                       reason: str, pos_data: dict, current_price: float):
-        print(f"\n🔴 Cerrando {pair} ({pos_type})")
-        print(f"   Razón: {reason}")
+        print(f"\n🔴 Closing {pair} ({pos_type})")
+        print(f"   Reason: {reason}")
         
         leverage = int(float(pos_data.get('leverage', 1)))
         
@@ -635,12 +671,12 @@ class PositionManagerV3:
                 result = self.kraken.close_position(
                     pair, pos_type, volume, leverage
                 )
-                print(f"   ✓ Cerrada: {result}")
+                print(f"   ✓ Closed: {result}")
             except Exception as e:
                 print(f"   ❌ Error: {e}")
                 return
         else:
-            print(f"   🧪 [SIMULACIÓN]")
+            print(f"   🧪 [SIMULATION]")
         
         entry = float(pos_data.get('cost', 0)) / float(pos_data.get('vol', 1))
         
@@ -650,18 +686,18 @@ class PositionManagerV3:
             pnl_pct = ((entry - current_price) / entry) * 100 * leverage
         
         msg = f"""
-🔴 <b>POSICIÓN CERRADA</b>
+🔴 <b>POSITION CLOSED</b>
 
-<b>Par:</b> {pair}
-<b>Tipo:</b> {pos_type.upper()}
-<b>Entrada:</b> ${entry:.4f}
-<b>Salida:</b> ${current_price:.4f}
+<b>Pair:</b> {pair}
+<b>Type:</b> {pos_type.upper()}
+<b>Entry:</b> ${entry:.4f}
+<b>Exit:</b> ${current_price:.4f}
 <b>PnL:</b> {pnl_pct:+.2f}%
 <b>Leverage:</b> {leverage}x
-<b>Razón:</b> {reason}
+<b>Reason:</b> {reason}
 """
         if self.config.DRY_RUN:
-            msg = "🧪 <b>SIMULACIÓN</b>\n" + msg
+            msg = "🧪 <b>SIMULATION</b>\n" + msg
         
         self.telegram.send(msg)
 
@@ -685,15 +721,18 @@ class TradingBotV4:
         
         # Sentiment Analyzer
         if config.USE_SENTIMENT_ANALYSIS and SENTIMENT_AVAILABLE:
-            self.sentiment_analyzer = SentimentAnalyzer(config.CRYPTOCOMPARE_API_KEY)
-            print("   ✓ Sentiment Analyzer activado")
+            self.sentiment_analyzer = SentimentAnalyzer(
+                cryptocompare_api_key=config.CRYPTOCOMPARE_API_KEY,
+                newsdata_api_key=config.NEWSDATA_API_KEY
+            )
+            print("   ✓ Sentiment Analyzer enabled (Fear & Greed — no CryptoCompare needed)")
         else:
             self.sentiment_analyzer = None
         
         # On-Chain Analyzer
         if config.USE_ONCHAIN_ANALYSIS and ONCHAIN_AVAILABLE:
             self.onchain_analyzer = OnChainAnalyzer(config.CRYPTOCOMPARE_API_KEY)
-            print("   ✓ On-Chain Analyzer activado")
+            print("   ✓ On-Chain Analyzer enabled")
         else:
             self.onchain_analyzer = None
         
@@ -706,7 +745,7 @@ class TradingBotV4:
                 StrategyType.TREND_FOLLOWING: config.WEIGHT_TREND_FOLLOWING
             }
             self.ensemble = EnsembleSystem(weights=weights)
-            print("   ✓ Ensemble System activado")
+            print("   ✓ Ensemble System enabled")
         else:
             self.ensemble = None
         
@@ -719,7 +758,7 @@ class TradingBotV4:
                 state_file=config.RL_STATE_FILE
             )
             self.rl_calculator = PositionSizeCalculator(self.rl_sizer)
-            print("   ✓ RL Position Sizing activado")
+            print("   ✓ RL Position Sizing enabled")
             
             # ✅ NUEVO: Crear archivo vacío si no existe
             self._initialize_rl_state_file()
@@ -742,9 +781,9 @@ class TradingBotV4:
                             'num_states': 0
                         }
                     }, f)
-                print(f"   📝 RL state file inicializado: {self.config.RL_STATE_FILE}")
+                print(f"   📝 RL state file initialized: {self.config.RL_STATE_FILE}")
         except Exception as e:
-            print(f"   ⚠️ Error inicializando RL state: {e}")
+            print(f"   ⚠️ Error initializing RL state: {e}")
     
     def get_market_data(self, symbol: str) -> pd.DataFrame:
         ticker = yf.Ticker(symbol)
@@ -770,7 +809,7 @@ class TradingBotV4:
         symbol = pair.yf_symbol
         signal, signal_price, swing_confidence = swing_signal
         
-        print(f"\n🔍 Análisis Multi-Layer: {symbol}")
+        print(f"\n🔍 Multi-Layer Analysis: {symbol}")
         print(f"   Swing Signal: {signal} (conf: {swing_confidence:.2f})")
         
         result = {
@@ -806,20 +845,20 @@ class TradingBotV4:
                     
                     if not can_trade_sentiment:
                         result['reasons'].append(
-                            f"❌ Sentiment conflictivo: {sentiment.overall_score:.2f}"
+                            f"❌ Sentiment conflicts: {sentiment.overall_score:.2f}"
                         )
-                        print(f"   ❌ Sentiment rechaza: {signal}")
+                        print(f"   ❌ Sentiment rejects: {signal}")
                         return result
                     
                     result['reasons'].append(
                         f"✓ Sentiment: {sentiment.overall_score:.2f} "
                         f"({result['v4_data']['sentiment']['signal_type']})"
                     )
-                    print(f"   ✓ Sentiment confirma")
+                    print(f"   ✓ Sentiment confirms")
                 else:
-                    print(f"   ℹ️ Sentiment no disponible")
+                    print(f"   ℹ️ Sentiment unavailable")
             except Exception as e:
-                print(f"   ⚠️ Error en sentiment: {e}")
+                print(f"   ⚠️ Sentiment error: {e}")
         
         # ═══════════════ LAYER 2: ON-CHAIN METRICS ═══════════════
         
@@ -843,19 +882,19 @@ class TradingBotV4:
                     
                     if not can_trade_onchain:
                         result['reasons'].append(
-                            f"❌ On-Chain conflictivo: {onchain.signal_type}"
+                            f"❌ On-Chain conflicts: {onchain.signal_type}"
                         )
-                        print(f"   ❌ On-Chain rechaza: {signal}")
+                        print(f"   ❌ On-Chain rejects: {signal}")
                         return result
                     
                     result['reasons'].append(
                         f"✓ On-Chain: {onchain.signal_type} (strength: {onchain.strength:.2f})"
                     )
-                    print(f"   ✓ On-Chain confirma")
+                    print(f"   ✓ On-Chain confirms")
                 else:
-                    print(f"   ℹ️ On-Chain no disponible")
+                    print(f"   ℹ️ On-Chain unavailable")
             except Exception as e:
-                print(f"   ⚠️ Error en on-chain: {e}")
+                print(f"   ⚠️ On-chain error: {e}")
         
         # ═══════════════ LAYER 3: ENSEMBLE STRATEGIES ═══════════════
         
@@ -885,7 +924,7 @@ class TradingBotV4:
                         f"(consensus: {ensemble_decision.consensus_level:.2f}, "
                         f"conf: {ensemble_decision.confidence:.2f})"
                     )
-                    print(f"   ❌ Ensemble no confirma")
+                    print(f"   ❌ Ensemble does not confirm")
                     return result
                 
                 result['reasons'].append(
@@ -894,9 +933,9 @@ class TradingBotV4:
                     f"conf: {ensemble_decision.confidence:.2%})"
                 )
                 result['confidence'] = ensemble_decision.confidence
-                print(f"   ✓ Ensemble confirma con {ensemble_decision.consensus_level:.0%} consenso")
+                print(f"   ✓ Ensemble confirms with {ensemble_decision.consensus_level:.0%} consensus")
             except Exception as e:
-                print(f"   ⚠️ Error en ensemble: {e}")
+                print(f"   ⚠️ Ensemble error: {e}")
                 traceback.print_exc()
                 result['confidence'] = swing_confidence
         else:
@@ -907,8 +946,8 @@ class TradingBotV4:
         result['can_trade'] = True
         result['final_signal'] = signal
         
-        print(f"\n✅ DECISIÓN: {signal}")
-        print(f"   Confianza final: {result['confidence']:.2%}")
+        print(f"\n✅ DECISION: {signal}")
+        print(f"   Final confidence: {result['confidence']:.2%}")
         
         return result
     
@@ -950,11 +989,11 @@ class TradingBotV4:
                 return capital, leverage
                 
             except Exception as e:
-                print(f"   ⚠️ Error en RL sizing: {e}")
+                print(f"   ⚠️ RL sizing error: {e}")
                 traceback.print_exc()
         
         # Fallback: sizing tradicional
-        print(f"\n   💰 Position Sizing tradicional")
+        print(f"\n   💰 Standard position sizing")
         allocation = pair.allocation
         capital = available_margin * allocation
         leverage = self.config.LEVERAGE
@@ -978,16 +1017,16 @@ class TradingBotV4:
         
         # Verificar volumen mínimo
         if volume < pair.min_volume:
-            print(f"   ⚠️ Volumen {volume:.8f} < mínimo {pair.min_volume}")
+            print(f"   ⚠️ Volume {volume:.8f} < minimum {pair.min_volume}")
             return
         
         try:
-            print(f"\n🟢 Abriendo {signal} en {pair.yf_symbol}")
-            print(f"   Precio: ${current_price:.4f}")
+            print(f"\n🟢 Opening {signal} on {pair.yf_symbol}")
+            print(f"   Price: ${current_price:.4f}")
             print(f"   Capital: ${capital:.2f}")
             print(f"   Leverage: {leverage}x")
-            print(f"   Volumen: {volume:.8f}")
-            print(f"   Confianza: {confidence:.2%}")
+            print(f"   Volume: {volume:.8f}")
+            print(f"   Confidence: {confidence:.2%}")
             
             if not self.config.DRY_RUN:
                 order_type = 'buy' if signal == 'BUY' else 'sell'
@@ -1000,7 +1039,7 @@ class TradingBotV4:
                     reduce_only=False
                 )
                 
-                print(f"   ✓ Ejecutada: {result}")
+                print(f"   ✓ Executed: {result}")
                 
                 # Guardar trade para RL
                 trade_record = {
@@ -1018,7 +1057,7 @@ class TradingBotV4:
                 self.trades_history.append(trade_record)
                 
             else:
-                print(f"   🧪 [SIMULACIÓN]")
+                print(f"   🧪 [SIMULATION]")
             
             # Notificación V4
             self._send_v4_notification(
@@ -1029,7 +1068,7 @@ class TradingBotV4:
         except Exception as e:
             error_msg = str(e)
             print(f"   ❌ Error: {error_msg}")
-            self.telegram.send(f"❌ Error en {pair.yf_symbol}: {error_msg}")
+            self.telegram.send(f"❌ Error on {pair.yf_symbol}: {error_msg}")
     
     def _send_v4_notification(self, pair, signal, price, volume, 
                              leverage, confidence, reasons, v4_data):
@@ -1050,7 +1089,7 @@ class TradingBotV4:
         
         if 'ensemble' in v4_data:
             ens = v4_data['ensemble']
-            v4_summary.append(f"Ensemble: {ens['consensus']:.0%} consenso")
+            v4_summary.append(f"Ensemble: {ens['consensus']:.0%} consensus")
         
         if 'rl_sizing' in v4_data:
             rl = v4_data['rl_sizing']
@@ -1059,26 +1098,26 @@ class TradingBotV4:
         v4_text = "\n".join(v4_summary) if v4_summary else "N/A"
         
         msg = f"""
-🟢 <b>NUEVA POSICIÓN V4</b>
+🟢 <b>NEW POSITION V4</b>
 
-<b>Par:</b> {pair.yf_symbol} ({pair.kraken_pair})
-<b>Señal:</b> {signal}
-<b>Precio:</b> ${price:.4f}
-<b>Volumen:</b> {volume:.8f}
+<b>Pair:</b> {pair.yf_symbol} ({pair.kraken_pair})
+<b>Signal:</b> {signal}
+<b>Price:</b> ${price:.4f}
+<b>Volume:</b> {volume:.8f}
 <b>Leverage:</b> {leverage}x
 
 <b>🤖 AI Analysis:</b>
-<b>Confianza:</b> {confidence:.1%}
+<b>Confidence:</b> {confidence:.1%}
 {v4_text}
 
-<b>📊 Validaciones:</b>
+<b>📊 Checks:</b>
 {reasons_text}
 
-<b>Fecha:</b> {datetime.now().strftime('%Y-%m-%d %H:%M')}
+<b>Date:</b> {datetime.now().strftime('%Y-%m-%d %H:%M')}
 """
         
         if self.config.DRY_RUN:
-            msg = "🧪 <b>SIMULACIÓN</b>\n" + msg
+            msg = "🧪 <b>SIMULATION</b>\n" + msg
         
         self.telegram.send(msg)
     
@@ -1092,7 +1131,7 @@ class TradingBotV4:
         print("KRAKEN TRADING BOT V4 - ADVANCED AI SYSTEM")
         print("="*70)
         print(f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"Mode: {'🧪 SIMULACIÓN' if self.config.DRY_RUN else '💰 REAL'}")
+        print(f"Mode: {'🧪 SIMULATION' if self.config.DRY_RUN else '💰 LIVE TRADING'}")
         print(f"ML Validation: {'✅' if self.config.USE_ML_VALIDATION else '❌'}")
         
         # Mostrar features V4 activas
@@ -1109,49 +1148,48 @@ class TradingBotV4:
             available_margin = self.kraken.get_available_margin()
             
             print(f"\n💰 Balance: {balance:.2f} {currency}")
-            print(f"   Margen disponible: {available_margin:.2f} {currency}")
+            print(f"   Available margin: {available_margin:.2f} {currency}")
             
             if balance < self.config.MIN_BALANCE:
-                print(f"⚠️ Balance insuficiente (min: {self.config.MIN_BALANCE})")
+                print(f"⚠️ Insufficient balance (min: {self.config.MIN_BALANCE})")
                 return
             
             usable_margin = available_margin / self.config.MARGIN_SAFETY_FACTOR
-            print(f"   Margen usable: {usable_margin:.2f} {currency}")
+            print(f"   Usable margin: {usable_margin:.2f} {currency}")
             
-            # Descargar datos de mercado
-            print("\n📊 Descargando datos multi-asset...")
+            print("\n📊 Downloading multi-asset data...")
             market_data = {}
             for pair in self.config.TRADING_PAIRS:
                 try:
                     data = self.get_market_data(pair.yf_symbol)
                     market_data[pair.yf_symbol] = data
-                    print(f"   ✓ {pair.yf_symbol}: {len(data)} velas")
+                    print(f"   ✓ {pair.yf_symbol}: {len(data)} candles")
                 except Exception as e:
                     print(f"   ❌ {pair.yf_symbol}: {e}")
             
             if not market_data:
-                print("❌ No se pudieron descargar datos")
+                print("❌ Could not download market data")
                 return
             
             # Calcular correlaciones
-            print("\n🔗 Calculando correlaciones...")
+            print("\n🔗 Calculating correlations...")
             corr_matrix = CorrelationManager.calculate_correlation_matrix(
                 market_data, lookback=30
             )
             
             if not corr_matrix.empty:
-                print("   Matriz de correlación:")
+                print("   Correlation matrix:")
                 print(corr_matrix.round(2))
             
             # Verificar posiciones abiertas
-            print("\n📊 Verificando posiciones ABIERTAS...")
+            print("\n📊 Checking OPEN positions...")
             positions = self.kraken.get_open_positions()
             
             open_symbols = []
             total_margin_used = 0.0
             valid_position_count = len(positions)
             
-            print(f"✅ {valid_position_count} posición(es) activas")
+            print(f"✅ {valid_position_count} active position(s)")
             
             if positions:
                 for pair_key, pos_data in positions.items():
@@ -1180,8 +1218,8 @@ class TradingBotV4:
                         self.config.BASE_TRAILING_STOP
                     )
                     
-                    print(f"\n   {trading_pair.yf_symbol} ({pair_key}) - Régimen: {regime}")
-                    print(f"   Margen usado: {pos_margin:.2f} {currency}")
+                    print(f"\n   {trading_pair.yf_symbol} ({pair_key}) - Regime: {regime}")
+                    print(f"   Margin used: {pos_margin:.2f} {currency}")
                     
                     # Verificar si cerrar
                     should_close, reason = self.position_mgr.check_position(
@@ -1206,28 +1244,26 @@ class TradingBotV4:
                                 reason
                             )
                     else:
-                        print(f"   ✓ Mantener posición")
+                        print(f"   ✓ Hold position")
             else:
-                print("✓ No hay posiciones abiertas")
+                print("✓ No open positions")
             
-            print(f"\n💰 Margen usado: {total_margin_used:.2f} {currency}")
-            print(f"   Margen restante: {(available_margin - total_margin_used):.2f} {currency}")
-            print(f"   Posiciones activas: {valid_position_count}/{self.config.MAX_POSITIONS}")
+            print(f"\n💰 Margin used: {total_margin_used:.2f} {currency}")
+            print(f"   Remaining margin: {(available_margin - total_margin_used):.2f} {currency}")
+            print(f"   Active positions: {valid_position_count}/{self.config.MAX_POSITIONS}")
             
-            # Verificar si podemos abrir nuevas posiciones
             if valid_position_count >= self.config.MAX_POSITIONS:
-                print(f"\nℹ️ Máximo de posiciones alcanzado ({self.config.MAX_POSITIONS})")
+                print(f"\nℹ️ Maximum positions reached ({self.config.MAX_POSITIONS})")
                 return
             
             margin_for_new = (available_margin - total_margin_used) / self.config.MARGIN_SAFETY_FACTOR
-            print(f"   Margen para nuevas posiciones: {margin_for_new:.2f} {currency}")
+            print(f"   Margin for new positions: {margin_for_new:.2f} {currency}")
             
             if margin_for_new < self.config.MIN_BALANCE * 0.5:
-                print(f"⚠️ Margen insuficiente para nuevas posiciones")
+                print(f"⚠️ Insufficient margin for new positions")
                 return
             
-            # Buscar señales en activos disponibles
-            print("\n🔍 Buscando señales con análisis V4...")
+            print("\n🔍 Scanning for signals with V4 analysis...")
             
             validated_signals = []
             
@@ -1236,7 +1272,7 @@ class TradingBotV4:
                     continue
                 
                 if pair.yf_symbol in open_symbols:
-                    print(f"   ⭕ {pair.yf_symbol}: posición ya abierta")
+                    print(f"   ⭕ {pair.yf_symbol}: position already open")
                     continue
                 
                 data = market_data[pair.yf_symbol]
@@ -1252,10 +1288,10 @@ class TradingBotV4:
                 signal, signal_price, confidence = detector.get_signal()
                 
                 if not signal:
-                    print(f"   - {pair.yf_symbol}: sin señal swing")
+                    print(f"   - {pair.yf_symbol}: no swing signal")
                     continue
                 
-                print(f"\n   🎯 {pair.yf_symbol}: Señal {signal} detectada")
+                print(f"\n   🎯 {pair.yf_symbol}: {signal} signal detected")
                 
                 # ═══════════════════════════════════════════════════
                 #       ANÁLISIS COMPLETO V4
@@ -1266,7 +1302,7 @@ class TradingBotV4:
                 )
                 
                 if not analysis['can_trade']:
-                    print(f"   ❌ Rechazado por análisis V4")
+                    print(f"   ❌ Rejected by V4 analysis")
                     continue
                 
                 # Verificar correlación
@@ -1275,7 +1311,7 @@ class TradingBotV4:
                 )
                 
                 if not can_open:
-                    print(f"   ⚠️ Rechazado por correlación ({max_corr:.2f})")
+                    print(f"   ⚠️ Rejected by correlation ({max_corr:.2f})")
                     continue
                 
                 # Señal validada
@@ -1286,10 +1322,10 @@ class TradingBotV4:
                     'current_price': current_price
                 })
                 
-                print(f"   ✅ {pair.yf_symbol} validado - Confianza: {analysis['confidence']:.2%}")
+                print(f"   ✅ {pair.yf_symbol} validated - Confidence: {analysis['confidence']:.2%}")
             
             if not validated_signals:
-                print("\nℹ️ No hay señales válidas después del análisis V4")
+                print("\nℹ️ No valid signals after V4 analysis")
                 return
             
             # Ordenar por confianza
@@ -1301,7 +1337,7 @@ class TradingBotV4:
                 self.config.MAX_POSITIONS - valid_position_count
             )
             
-            print(f"\n🎯 Abriendo {positions_to_open} posición(es) con AI V4...")
+            print(f"\n🎯 Opening {positions_to_open} position(s) with AI V4...")
             
             remaining_margin = margin_for_new
             
@@ -1329,15 +1365,15 @@ class TradingBotV4:
                 remaining_margin = max(0, remaining_margin - margin_used)
                 
                 if remaining_margin < self.config.MIN_BALANCE * 0.5:
-                    print(f"   ⚠️ Margen restante insuficiente, deteniendo aperturas")
+                    print(f"   ⚠️ Insufficient remaining margin, stopping opens")
                     break
             
             # ✅ CORREGIDO: Guardar siempre (no solo en modo REAL)
             if self.rl_sizer:
                 self.rl_sizer.save_state()
-                print(f"\n💾 RL state guardado")
+                print(f"\n💾 RL state saved")
             
-            print("\n✅ Ciclo completado")
+            print("\n✅ Cycle completed")
             
         except Exception as e:
             msg = f"Error: {str(e)}"
@@ -1391,10 +1427,10 @@ class TradingBotV4:
             
             reward = self.rl_sizer.calculate_reward(trade_result)
             
-            print(f"   🤖 RL: reward={reward:.3f} para PnL={pnl_pct:.2f}%")
+            print(f"   🤖 RL: reward={reward:.3f} for PnL={pnl_pct:.2f}%")
             
         except Exception as e:
-            print(f"   ⚠️ Error actualizando RL: {e}")
+            print(f"   ⚠️ Error updating RL: {e}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1412,23 +1448,31 @@ def main():
     
     # Verificar credenciales básicas
     if not config.KRAKEN_API_KEY or not config.KRAKEN_API_SECRET:
-        print("❌ Faltan credenciales Kraken")
+        print("❌ Missing Kraken credentials")
+        return
+    
+    if len(config.KRAKEN_API_SECRET) < 50:
+        print("❌ KRAKEN_API_SECRET looks too short or incomplete.")
+        print("   Kraken private keys are usually ~88 characters (base64).")
+        print("   Re-copy the FULL private key from Kraken → Settings → API.")
+        print("   Paste into .env with no quotes and no spaces:")
+        print("   KRAKEN_API_SECRET=paste_full_key_here")
         return
     
     # Verificar APIs V4
     missing_apis = []
     
-    if config.USE_SENTIMENT_ANALYSIS and not config.CRYPTOCOMPARE_API_KEY:
-        missing_apis.append("CRYPTOCOMPARE_API_KEY (para Sentiment)")
+    if config.USE_SENTIMENT_ANALYSIS and not config.CRYPTOCOMPARE_API_KEY and not config.NEWSDATA_API_KEY:
+        print("\nℹ️ Sentiment uses free Fear & Greed Index (no CryptoCompare key needed)")
     
     if config.USE_ONCHAIN_ANALYSIS and not config.CRYPTOCOMPARE_API_KEY:
-        missing_apis.append("CRYPTOCOMPARE_API_KEY (para On-Chain)")
+        missing_apis.append("CRYPTOCOMPARE_API_KEY (for On-Chain — or set USE_ONCHAIN_ANALYSIS=false)")
     
     if missing_apis:
-        print("\n⚠️ ADVERTENCIA: Features V4 desactivadas por falta de APIs:")
+        print("\n⚠️ WARNING: V4 features disabled due to missing APIs:")
         for api in missing_apis:
             print(f"   - {api}")
-        print("\nEl bot funcionará sin estas features.")
+        print("\nThe bot will run without these features.")
     
     # Verificar módulos V4
     missing_modules = []
@@ -1446,10 +1490,10 @@ def main():
         missing_modules.append("rl_position_sizing.py")
     
     if missing_modules:
-        print("\n⚠️ ADVERTENCIA: Módulos V4 no encontrados:")
+        print("\n⚠️ WARNING: V4 modules not found:")
         for mod in missing_modules:
             print(f"   - {mod}")
-        print("\nEl bot funcionará sin estas features.")
+        print("\nThe bot will run without these features.")
     
     print("\n" + "╔"*70)
     

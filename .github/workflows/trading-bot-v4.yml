@@ -1,56 +1,53 @@
-name: Kraken Trading Bot V4 - Advanced AI
+name: Kraken Trading Bot V4
 
 on:
-  # Automático cada 15 minutos
   schedule:
     - cron: '*/15 * * * *'
-  
-  # Manual con opciones
+
   workflow_dispatch:
     inputs:
       dry_run:
-        description: 'Modo Simulación (true) o Real (false)'
+        description: 'Simulation (true) or Live trading (false)'
         required: false
         default: 'false'
       use_sentiment:
-        description: 'Usar Sentiment Analysis'
+        description: 'Use Sentiment Analysis'
         required: false
         default: 'true'
       use_onchain:
-        description: 'Usar On-Chain Metrics'
+        description: 'Use On-Chain Metrics'
         required: false
-        default: 'true'
+        default: 'false'
       use_ensemble:
-        description: 'Usar Multi-Strategy Ensemble'
+        description: 'Use Multi-Strategy Ensemble'
         required: false
-        default: 'true'
+        default: 'false'
       use_rl:
-        description: 'Usar RL Position Sizing'
+        description: 'Use RL Position Sizing'
         required: false
-        default: 'true'
+        default: 'false'
 
 jobs:
   trade:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    
+
     steps:
-    - name: 🔥 Checkout código
+    - name: Checkout code
       uses: actions/checkout@v4
-    
-    - name: 🐍 Setup Python 3.11
+
+    - name: Setup Python 3.11
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
         cache: 'pip'
-    
-    - name: 📦 Instalar dependencias
+
+    - name: Install dependencies
       run: |
         pip install --upgrade pip
         pip install -r requirements.txt
-    
-    # ✅ CORREGIDO: Cargar RL state con mejor manejo
-    - name: 📂 Cargar RL State
+
+    - name: Load RL state cache
       id: load-rl
       continue-on-error: true
       uses: actions/cache@v4
@@ -59,136 +56,73 @@ jobs:
         key: rl-state-${{ github.run_number }}
         restore-keys: |
           rl-state-
-    
-    # ✅ NUEVO: Crear archivo vacío si no existe
-    - name: 📝 Inicializar RL State si no existe
+
+    - name: Initialize RL state if missing
       run: |
         if [ ! -f rl_state.json ]; then
           echo '{"q_table": {}, "metadata": {"created": "init", "num_states": 0}}' > rl_state.json
-          echo "✓ RL state inicializado"
-        else
-          echo "✓ RL state cargado desde cache"
         fi
-    
-    - name: 🚀 Ejecutar Bot V4 (Advanced AI)
+
+    - name: Run Trading Bot V4
       env:
-        # ═══════════════════════════════════════════════════════════
-        #                    APIS
-        # ═══════════════════════════════════════════════════════════
         KRAKEN_API_KEY: ${{ secrets.KRAKEN_API_KEY }}
         KRAKEN_API_SECRET: ${{ secrets.KRAKEN_API_SECRET }}
+        NEWSDATA_API_KEY: ${{ secrets.NEWSDATA_API_KEY }}
         CRYPTOCOMPARE_API_KEY: ${{ secrets.CRYPTOCOMPARE_API_KEY }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        
-        # ═══════════════════════════════════════════════════════════
-        #            SENTIMENT ANALYSIS (V4)
-        # ═══════════════════════════════════════════════════════════
+
         USE_SENTIMENT_ANALYSIS: ${{ github.event.inputs.use_sentiment || 'true' }}
         MIN_SENTIMENT_CONFIDENCE: '0.5'
-        
-        # ═══════════════════════════════════════════════════════════
-        #            ON-CHAIN ANALYSIS (V4)
-        # ═══════════════════════════════════════════════════════════
-        USE_ONCHAIN_ANALYSIS: ${{ github.event.inputs.use_onchain || 'true' }}
+
+        USE_ONCHAIN_ANALYSIS: ${{ github.event.inputs.use_onchain || 'false' }}
         MIN_ONCHAIN_STRENGTH: '0.5'
-        
-        # ═══════════════════════════════════════════════════════════
-        #         MULTI-STRATEGY ENSEMBLE (V4)
-        # ═══════════════════════════════════════════════════════════
-        USE_ENSEMBLE_SYSTEM: ${{ github.event.inputs.use_ensemble || 'true' }}
-        MIN_ENSEMBLE_CONSENSUS: '0.6'     # 60% estrategias deben coincidir
-        MIN_ENSEMBLE_CONFIDENCE: '0.6'    # Confianza mínima del ensemble
-        
-        # Pesos de estrategias (deben sumar ~1.0)
-        WEIGHT_SWING: '0.30'
-        WEIGHT_MOMENTUM: '0.25'
-        WEIGHT_MEAN_REVERSION: '0.25'
-        WEIGHT_TREND_FOLLOWING: '0.20'
-        
-        # ═══════════════════════════════════════════════════════════
-        #       REINFORCEMENT LEARNING (V4)
-        # ═══════════════════════════════════════════════════════════
-        USE_RL_POSITION_SIZING: ${{ github.event.inputs.use_rl || 'true' }}
-        RL_LEARNING_RATE: '0.1'           # Alpha
-        RL_DISCOUNT_FACTOR: '0.95'        # Gamma
-        RL_EPSILON: '0.1'                 # Exploración (10%)
+
+        USE_ENSEMBLE_SYSTEM: ${{ github.event.inputs.use_ensemble || 'false' }}
+        MIN_ENSEMBLE_CONSENSUS: '0.6'
+        MIN_ENSEMBLE_CONFIDENCE: '0.6'
+
+        USE_RL_POSITION_SIZING: ${{ github.event.inputs.use_rl || 'false' }}
+        RL_LEARNING_RATE: '0.1'
+        RL_DISCOUNT_FACTOR: '0.95'
+        RL_EPSILON: '0.1'
         RL_STATE_FILE: 'rl_state.json'
-        
-        # ═══════════════════════════════════════════════════════════
-        #            MULTI-ASSET TRADING (v4)
-        # ═══════════════════════════════════════════════════════════
+
         MAX_CORRELATION: '0.7'
-        MAX_POSITIONS: '3'
-        
-        # ═══════════════════════════════════════════════════════════
-        #            RISK MANAGEMENT
-        # ═══════════════════════════════════════════════════════════
-        LEVERAGE: '3'                     # Base leverage (RL puede ajustar)
+        MAX_POSITIONS: '1'
+        LEVERAGE: '3'
         MIN_BALANCE: '1.0'
-        
-        STOP_LOSS_PCT: '4.0'              # Base (regime puede ajustar)
+
+        STOP_LOSS_PCT: '4.0'
         TAKE_PROFIT_PCT: '8.0'
         TRAILING_STOP_PCT: '2.5'
         MIN_PROFIT_FOR_TRAILING: '3.0'
-        
-        # ═══════════════════════════════════════════════════════════
-        #            STRATEGY SETTINGS (v4)
-        # ═══════════════════════════════════════════════════════════
+
         LOOKBACK_PERIOD: '180d'
         CANDLE_INTERVAL: '1h'
         USE_VOLUME_FILTER: 'true'
         REGIME_LOOKBACK: '30'
-        
-        # ML Validation (v4)
+
         USE_ML_VALIDATION: 'true'
         ML_CONFIDENCE_THRESHOLD: '0.6'
-        
-        # ═══════════════════════════════════════════════════════════
-        #            MODE
-        # ═══════════════════════════════════════════════════════════
+
         DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
-      
+
       run: |
-        echo "═══════════════════════════════════════════════════════════════════"
-        echo "🚀 KRAKEN TRADING BOT V4 - ADVANCED AI SYSTEM"
-        echo "═══════════════════════════════════════════════════════════════════"
-        echo "📅 $(date)"
-        echo "🎯 Mode: $([ "$DRY_RUN" = "true" ] && echo "SIMULATION" || echo "REAL TRADING")"
-        echo ""
-        echo "🤖 AI Features V4:"
-        echo "   Sentiment Analysis: $USE_SENTIMENT_ANALYSIS"
-        echo "   On-Chain Metrics: $USE_ONCHAIN_ANALYSIS"
-        echo "   Ensemble System: $USE_ENSEMBLE_SYSTEM"
-        echo "   RL Position Sizing: $USE_RL_POSITION_SIZING"
-        echo "═══════════════════════════════════════════════════════════════════"
-        echo ""
-        
-        # Ejecutar bot V4
+        echo "KRAKEN TRADING BOT V4"
+        echo "Date: $(date)"
+        echo "Mode: $([ "$DRY_RUN" = "true" ] && echo "SIMULATION" || echo "LIVE TRADING")"
         python kraken_bot_v4_advanced.py
-    
-    # ✅ CORREGIDO: Guardar RL state mejorado
-    - name: 💾 Guardar RL State
+
+    - name: Save RL state cache
       if: always()
       continue-on-error: true
-      run: |
-        if [ -f rl_state.json ]; then
-          echo "✓ RL state existe, será guardado en cache"
-          ls -lh rl_state.json
-        else
-          echo "⚠️ RL state no encontrado, creando archivo vacío"
-          echo '{"q_table": {}, "metadata": {}}' > rl_state.json
-        fi
-    
-    - name: 📤 Cache RL State
-      if: always()
       uses: actions/cache@v4
       with:
         path: rl_state.json
         key: rl-state-${{ github.run_number }}
-    
-    # Subir logs como artifacts (para debugging)
-    - name: 📤 Subir logs
+
+    - name: Upload logs
       if: always()
       uses: actions/upload-artifact@v4
       with:
@@ -197,18 +131,3 @@ jobs:
           *.log
           rl_state.json
         retention-days: 7
-    
-    - name: ✅ Completado
-      if: success()
-      run: |
-        echo "═══════════════════════════════════════════════════════════════════"
-        echo "✅ Bot V4 ejecutado exitosamente - $(date)"
-        echo "═══════════════════════════════════════════════════════════════════"
-    
-    - name: ❌ Error
-      if: failure()
-      run: |
-        echo "═══════════════════════════════════════════════════════════════════"
-        echo "❌ Error en ejecución - $(date)"
-        echo "═══════════════════════════════════════════════════════════════════"
-        exit 1
