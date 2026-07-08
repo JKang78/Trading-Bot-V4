@@ -162,6 +162,7 @@ class Config:
     BASE_TAKE_PROFIT = float(os.getenv('TAKE_PROFIT_PCT', '8.0'))
     BASE_TRAILING_STOP = float(os.getenv('TRAILING_STOP_PCT', '2.5'))
     MIN_PROFIT_FOR_TRAILING = float(os.getenv('MIN_PROFIT_FOR_TRAILING', '3.0'))
+    V4_POSITION_STATE_FILE = os.getenv('V4_POSITION_STATE_FILE', 'v4_position_state.json')
     
     # ══════════════════ Strategy ══════════════════
     LOOKBACK_PERIOD = os.getenv('LOOKBACK_PERIOD', '180d')
@@ -678,14 +679,71 @@ class PositionManagerV3:
         self.config = config
         self.kraken = kraken
         self.telegram = telegram
+        self.state_file = Path(config.V4_POSITION_STATE_FILE)
         self.peak_prices = {}
         self.position_regimes = {}
+        self.load_state()
+
+    def load_state(self) -> None:
+        if not self.state_file.exists():
+            return
+        try:
+            state = json.loads(self.state_file.read_text())
+            self.peak_prices = {
+                key: float(value)
+                for key, value in state.get('peak_prices', {}).items()
+                if value is not None
+            }
+        except Exception as e:
+            print(f"   ⚠️ Could not load V4 position state: {e}")
+
+    def save_state(self) -> None:
+        try:
+            state = {
+                'peak_prices': self.peak_prices,
+                'updated_at': datetime.utcnow().isoformat() + 'Z',
+            }
+            self.state_file.write_text(json.dumps(state, indent=2))
+        except Exception as e:
+            print(f"   ⚠️ Could not save V4 position state: {e}")
+
+    def sync_active_positions(self, active_position_ids: List[str]) -> None:
+        active = set(active_position_ids)
+        self.peak_prices = {
+            key: value for key, value in self.peak_prices.items()
+            if key in active
+        }
+        self.save_state()
+
+    @staticmethod
+    def normalize_position_type(pos_type: str) -> str:
+        normalized = str(pos_type or '').lower()
+        if normalized in ('buy', 'long'):
+            return 'long'
+        if normalized in ('sell', 'short'):
+            return 'short'
+        return normalized or 'unknown'
+
+    @staticmethod
+    def infer_leverage(pos_data: dict) -> float:
+        raw = pos_data.get('leverage')
+        if raw not in (None, '', 'none'):
+            try:
+                return float(raw)
+            except (TypeError, ValueError):
+                pass
+
+        cost = float(pos_data.get('cost', 0) or 0)
+        margin = float(pos_data.get('margin', 0) or 0)
+        if margin > 0 and cost > 0:
+            return max(1.0, round(cost / margin))
+        return 1.0
     
     def check_position(self, pos_id: str, pos_data: dict, current_price: float,
                       regime_params: Dict[str, float]) -> Tuple[bool, str]:
-        pos_type = pos_data.get('type', 'long')
+        pos_type = self.normalize_position_type(pos_data.get('type', 'long'))
         entry_price = float(pos_data.get('cost', 0)) / float(pos_data.get('vol', 1))
-        leverage = float(pos_data.get('leverage', 1))
+        leverage = self.infer_leverage(pos_data)
         
         if pos_type == 'long':
             pnl_pct = ((current_price - entry_price) / entry_price) * 100 * leverage
@@ -726,10 +784,11 @@ class PositionManagerV3:
     
     def close_position(self, pair: str, pos_type: str, volume: float, 
                       reason: str, pos_data: dict, current_price: float):
+        pos_type = self.normalize_position_type(pos_type)
         print(f"\n🔴 Closing {pair} ({pos_type})")
         print(f"   Reason: {reason}")
         
-        leverage = int(float(pos_data.get('leverage', 1)))
+        leverage = int(self.infer_leverage(pos_data))
         
         if not self.config.DRY_RUN:
             try:
@@ -737,9 +796,11 @@ class PositionManagerV3:
                     pair, pos_type, volume, leverage
                 )
                 print(f"   ✓ Closed: {result}")
+                self.peak_prices.pop(pair, None)
+                self.save_state()
             except Exception as e:
                 print(f"   ❌ Error: {e}")
-                return
+                return False
         else:
             print(f"   🧪 [SIMULATION]")
         
@@ -765,6 +826,7 @@ class PositionManagerV3:
             msg = "🧪 <b>SIMULATION</b>\n" + msg
         
         self.telegram.send(msg)
+        return True
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1280,6 +1342,7 @@ class TradingBotV4:
             positions = self.kraken.get_open_positions()
             
             open_symbols = []
+            active_position_ids = []
             total_margin_used = 0.0
             valid_position_count = len(positions)
             
@@ -1316,21 +1379,26 @@ class TradingBotV4:
                     print(f"   Margin used: {pos_margin:.2f} {currency}")
                     
                     # Check whether to close
+                    normalized_pos_type = self.position_mgr.normalize_position_type(
+                        pos_data.get('type', 'long')
+                    )
                     should_close, reason = self.position_mgr.check_position(
                         pair_key, pos_data, current_price, regime_params
                     )
                     
                     if should_close:
-                        pos_type = pos_data.get('type', 'long')
                         volume = float(pos_data.get('vol', 0))
-                        self.position_mgr.close_position(
-                            pair_key, pos_type, volume, reason, pos_data, current_price
+                        closed = self.position_mgr.close_position(
+                            pair_key, normalized_pos_type, volume, reason, pos_data, current_price
                         )
-                        total_margin_used -= pos_margin
-                        valid_position_count -= 1
-                        
-                        # Update RL if active
-                        if self.rl_sizer:
+                        if closed:
+                            total_margin_used -= pos_margin
+                            valid_position_count -= 1
+                        else:
+                            active_position_ids.append(pair_key)
+
+                        # Update RL if active and the close was confirmed.
+                        if closed and self.rl_sizer:
                             self._update_rl_on_close(
                                 trading_pair.yf_symbol, 
                                 pos_data, 
@@ -1338,9 +1406,12 @@ class TradingBotV4:
                                 reason
                             )
                     else:
+                        active_position_ids.append(pair_key)
                         print(f"   ✓ Hold position")
             else:
                 print("✓ No open positions")
+
+            self.position_mgr.sync_active_positions(active_position_ids)
             
             print(f"\n💰 Margin used: {total_margin_used:.2f} {currency}")
             print(f"   Remaining margin: {(available_margin - total_margin_used):.2f} {currency}")
@@ -1463,6 +1534,7 @@ class TradingBotV4:
                     break
             
             # Always save (not only in LIVE mode)
+            self.position_mgr.save_state()
             if self.rl_sizer:
                 self.rl_sizer.save_state()
                 print(f"\n💾 RL state saved")

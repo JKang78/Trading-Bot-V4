@@ -1,12 +1,10 @@
 name: Kraken Trading Bot V4
 
-# NOTE: Automatic schedule DISABLED. The real-money ML strategy
-# (ml-live-trade.yml) now trades this Kraken account. Running both on one
-# account causes margin/position conflicts. This old swing bot can still be
-# run manually via "Run workflow" if needed.
+# Old V4 swing bot live test. The ML live workflow schedule is paused so only
+# one bot controls the Kraken account.
 on:
-  # schedule:
-  #   - cron: '*/10 * * * *'
+  schedule:
+    - cron: '*/15 * * * *'
 
   workflow_dispatch:
     inputs:
@@ -30,6 +28,10 @@ on:
         description: 'Use RL Position Sizing'
         required: false
         default: 'false'
+
+concurrency:
+  group: old-v4-live-trade
+  cancel-in-progress: false
 
 jobs:
   trade:
@@ -67,6 +69,15 @@ jobs:
           echo '{"q_table": {}, "metadata": {"created": "init", "num_states": 0}}' > rl_state.json
         fi
 
+    - name: Load V4 position state cache
+      continue-on-error: true
+      uses: actions/cache/restore@v4
+      with:
+        path: v4_position_state.json
+        key: v4-position-state-${{ github.run_number }}
+        restore-keys: |
+          v4-position-state-
+
     - name: Run Trading Bot V4
       env:
         KRAKEN_API_KEY: ${{ secrets.KRAKEN_API_KEY }}
@@ -92,6 +103,7 @@ jobs:
         RL_DISCOUNT_FACTOR: '0.95'
         RL_EPSILON: '0.1'
         RL_STATE_FILE: 'rl_state.json'
+        V4_POSITION_STATE_FILE: 'v4_position_state.json'
 
         MAX_CORRELATION: '0.7'
         MAX_POSITIONS: '1'
@@ -131,6 +143,14 @@ jobs:
         path: rl_state.json
         key: rl-state-${{ github.run_number }}
 
+    - name: Save V4 position state cache
+      if: always()
+      continue-on-error: true
+      uses: actions/cache/save@v4
+      with:
+        path: v4_position_state.json
+        key: v4-position-state-${{ github.run_number }}
+
     - name: Upload logs
       if: always()
       uses: actions/upload-artifact@v4
@@ -139,4 +159,5 @@ jobs:
         path: |
           *.log
           rl_state.json
+          v4_position_state.json
         retention-days: 7
