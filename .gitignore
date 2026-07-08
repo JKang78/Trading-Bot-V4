@@ -8,3 +8,8 @@ rl_state.json
 # Generated backtest / research outputs and paper-trading state
 *.csv
 ml_paper_state.json
+ml_paper_state_h72.json
+ml_live_state.json
+long_history_run.log
+partial_history_results.txt
+data_cc/

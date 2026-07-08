@@ -40,9 +40,12 @@ SYMBOLS = [s.strip() for s in os.getenv(
     'ML_PAPER_SYMBOLS', 'XRP-USD,ADA-USD,SOL-USD,BTC-USD,ETH-USD').split(',') if s.strip()]
 PERIOD = os.getenv('ML_PAPER_PERIOD', '720d')     # history for training
 INTERVAL = os.getenv('ML_PAPER_INTERVAL', '1h')
-HORIZON = int(os.getenv('ML_PAPER_HORIZON', '48'))       # hold ~2 days
-BUY_THR = float(os.getenv('ML_PAPER_BUY_THR', '0.65'))
+HORIZON = int(os.getenv('ML_PAPER_HORIZON', '72'))
+BUY_THR = float(os.getenv('ML_PAPER_BUY_THR', '0.68'))
 SELL_THR = float(os.getenv('ML_PAPER_SELL_THR', '0.35'))
+EXIT_THR = float(os.getenv('ML_PAPER_EXIT_THR', '0.40'))
+USE_FNG_FEATURES = os.getenv('ML_PAPER_FNG_FEATURES', 'true').lower() == 'true'
+USE_FNG_FILTER = os.getenv('ML_PAPER_FNG_FILTER', 'true').lower() == 'true'
 LEVERAGE = float(os.getenv('ML_PAPER_LEVERAGE', '2'))
 FEE_PER_SIDE = float(os.getenv('ML_PAPER_FEE', '0.001'))  # maker fee per side
 START_EQUITY = float(os.getenv('ML_PAPER_START_EQUITY', '1000'))
@@ -81,7 +84,11 @@ def net_pnl_pct(direction: str, entry: float, exit_price: float) -> float:
 def main() -> None:
     config = Config()
     telegram = Telegram(config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_CHAT_ID)
-    strategy = MLSwingStrategy(horizon=HORIZON, buy_thr=BUY_THR, sell_thr=SELL_THR)
+    strategy = MLSwingStrategy(
+        horizon=HORIZON, buy_thr=BUY_THR, sell_thr=SELL_THR, exit_thr=EXIT_THR,
+        use_fng_features=USE_FNG_FEATURES, use_fng_filter=USE_FNG_FILTER,
+        long_only=(SELL_THR <= 0),
+    )
 
     state = load_state()
     actions = []  # human-readable lines describing what happened this run
@@ -96,7 +103,7 @@ def main() -> None:
         except Exception as e:
             print(f"  ⚠️ {symbol}: data error {e}")
 
-    # ── 1) Close paper positions whose hold period is over ──
+    # ── 1) Close paper positions when hold is up OR model says bail ──
     for symbol in list(state['open'].keys()):
         pos = state['open'][symbol]
         df = data_by_symbol.get(symbol)
@@ -104,21 +111,29 @@ def main() -> None:
             continue
         now = df.index[-1]
         exit_due = pd.Timestamp(pos['exit_due'])
-        # get_history returns tz-naive timestamps, so this compares cleanly.
-        if now >= exit_due:
-            current_price = float(df['Close'].iloc[-1])
-            pnl_pct = net_pnl_pct(pos['direction'], pos['entry_price'], current_price)
-            pnl_usd = pos['margin_usd'] * pnl_pct / 100
-            state['equity'] += pnl_usd
+        time_due = now >= exit_due
+        early_exit = False
+        exit_prob = pos.get('prob_up', 0.5)
+        if not time_due and pos['direction'] == 'long' and EXIT_THR > 0:
+            early_exit, exit_prob = strategy.should_exit_early(df)
+        if not time_due and not early_exit:
+            continue
 
-            closed = {**pos, 'symbol': symbol, 'exit_price': current_price,
-                      'exit_time': str(now), 'pnl_pct': round(pnl_pct, 3),
-                      'pnl_usd': round(pnl_usd, 2)}
-            state['closed'].append(closed)
-            del state['open'][symbol]
-            actions.append(
-                f"CLOSE {symbol} {pos['direction']} @ {current_price:.4f} "
-                f"-> {pnl_pct:+.2f}% ({pnl_usd:+.2f}$)")
+        current_price = float(df['Close'].iloc[-1])
+        pnl_pct = net_pnl_pct(pos['direction'], pos['entry_price'], current_price)
+        pnl_usd = pos['margin_usd'] * pnl_pct / 100
+        state['equity'] += pnl_usd
+
+        closed = {**pos, 'symbol': symbol, 'exit_price': current_price,
+                  'exit_time': str(now), 'pnl_pct': round(pnl_pct, 3),
+                  'pnl_usd': round(pnl_usd, 2),
+                  'exit_reason': 'model_exit' if early_exit else 'time'}
+        state['closed'].append(closed)
+        del state['open'][symbol]
+        tag = f" ({closed['exit_reason']})" if early_exit else ""
+        actions.append(
+            f"CLOSE {symbol} {pos['direction']} @ {current_price:.4f} "
+            f"-> {pnl_pct:+.2f}% ({pnl_usd:+.2f}$){tag}")
 
     # ── 2) Open new paper positions when the model is confident ──
     for symbol in SYMBOLS:

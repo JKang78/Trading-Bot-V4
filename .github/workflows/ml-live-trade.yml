@@ -1,12 +1,12 @@
 name: ML Strategy LIVE Trading (real money)
 
 # ⚠️ THIS PLACES REAL ORDERS ON KRAKEN via ml_live_trade.py.
-# Trades the validated longer-horizon ML strategy on XRP/ADA/SOL.
+# V2 strategy: h=72, thr=0.68, Fear&Greed features, adaptive exit, F&G filter.
 # To pause it: comment out the schedule below (like the old swing bot).
 
 on:
   schedule:
-    - cron: '0 * * * *'   # hourly (data is 1h; holds are ~2 days)
+    - cron: '0 * * * *'   # hourly (data is 1h; holds are ~3 days)
   workflow_dispatch:
     inputs:
       dry_run:
@@ -55,14 +55,16 @@ jobs:
         KRAKEN_API_SECRET: ${{ secrets.KRAKEN_API_SECRET }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        # LINK + DOGE added after passing the same walk-forward validation
-        # (positive expectancy in both early and holdout periods, honest fees).
         ML_LIVE_SYMBOLS: 'XRP-USD,ADA-USD,SOL-USD,LINK-USD,DOGE-USD'
+        ML_LIVE_HORIZON: '72'
+        ML_LIVE_BUY_THR: '0.68'
+        ML_LIVE_EXIT_THR: '0.40'
+        ML_LIVE_FNG_FEATURES: 'true'
+        ML_LIVE_FNG_FILTER: 'true'
         ML_LIVE_LEVERAGE: '2'
         # 5 coins x 20% = full usable margin when all signal at once.
         ML_LIVE_POSITION_FRACTION: '0.20'
         ML_LIVE_MAX_OPEN: '5'
-        # Longs backtested at ~+3.0%/trade vs ~+0.9% for shorts -> long-only.
         ML_LIVE_LONG_ONLY: 'true'
         # Try cheap maker (post-only limit) entry first, market fallback after 90s.
         ML_LIVE_MAKER_ENTRY: 'true'

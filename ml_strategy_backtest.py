@@ -30,7 +30,8 @@ import pandas as pd
 
 # Reuse the same data + feature code so research and backtest stay consistent.
 from backtest import get_history, compute_atr
-from research_edge import build_features, build_labels, make_model
+from research_edge import build_labels, make_model
+from ml_strategy import build_enhanced_features, passes_fng_filter
 
 
 def backtest_symbol(
@@ -46,12 +47,15 @@ def backtest_symbol(
     retrain_every: int,
     atr_stop_mult: float,
     atr_period: int,
+    exit_thr: float = 0.0,
+    use_fng_features: bool = True,
+    use_fng_filter: bool = False,
     starting_equity: float = 1000.0,
     margin_open_fee: float = 0.0002,
     rollover_fee: float = 0.0002,
 ) -> dict:
     """Run the walk-forward backtest for one coin and return its stats."""
-    feats = build_features(data)
+    feats = build_enhanced_features(data, use_fng_features)
     labels, _fwd = build_labels(data, horizon)
 
     feature_cols = list(feats.columns)
@@ -113,6 +117,12 @@ def backtest_symbol(
             equity_curve.append(equity)
             continue
 
+        if direction == 'long' and use_fng_filter:
+            if not passes_fng_filter(data.index[i]):
+                i += 1
+                equity_curve.append(equity)
+                continue
+
         entry_price = close[i]
         entry_atr = atr_all[i] if atr_all is not None else None
 
@@ -125,7 +135,7 @@ def backtest_symbol(
         else:
             stop_price = None
 
-        # ---- Hold for up to `horizon` bars; exit on stop or at the time limit ----
+        # ---- Hold for up to `horizon` bars; exit on stop, model bail, or time ----
         exit_idx = min(i + horizon, n - 1)
         exit_price = close[exit_idx]
         exit_reason = 'time'
@@ -136,6 +146,12 @@ def backtest_symbol(
                     break
                 if direction == 'short' and high[j] >= stop_price:
                     exit_price, exit_idx, exit_reason = stop_price, j, 'stop'
+                    break
+            # Adaptive exit: model lost confidence during the hold.
+            if exit_thr > 0 and direction == 'long' and valid_feat[j]:
+                p = float(model.predict_proba(X_all[j:j + 1])[:, 1][0])
+                if p < exit_thr:
+                    exit_price, exit_idx, exit_reason = close[j], j, 'model_exit'
                     break
 
         if direction == 'long':
@@ -218,9 +234,15 @@ def main() -> None:
     parser.add_argument('--symbols', default='XRP-USD,ADA-USD,SOL-USD,BTC-USD,ETH-USD')
     parser.add_argument('--period', default='720d')
     parser.add_argument('--interval', default='1h')
-    parser.add_argument('--horizon', type=int, default=48, help="Hold this many bars (~2 days at 1h).")
-    parser.add_argument('--buy-thr', type=float, default=0.55)
+    parser.add_argument('--horizon', type=int, default=72, help="Hold this many bars (~3 days at 1h).")
+    parser.add_argument('--buy-thr', type=float, default=0.68)
     parser.add_argument('--sell-thr', type=float, default=0.45)
+    parser.add_argument('--exit-thr', type=float, default=0.40,
+                        help="Close long early if P(up) drops below this (0=off).")
+    parser.add_argument('--no-fng-features', action='store_true',
+                        help="Disable Fear & Greed features.")
+    parser.add_argument('--fng-filter', action='store_true',
+                        help="Skip entries when F&G index is 25-40.")
     parser.add_argument('--fee', type=float, default=0.001, help="Maker fee per side (0.001 = 0.10%%).")
     parser.add_argument('--leverage', type=float, default=2.0)
     parser.add_argument('--model', choices=['logistic', 'gbm'], default='logistic')
@@ -245,7 +267,9 @@ def main() -> None:
     print(f"ML strategy backtest | model={args.model} | horizon={args.horizon}b | "
           f"lev={args.leverage}x | fee={args.fee * 100:.2f}%/side | "
           f"margin open={args.margin_open_fee * 100:.2f}% + rollover={args.rollover_fee * 100:.2f}%/4h | "
-          f"buy>{args.buy_thr} sell<{args.sell_thr} | atr_stop={args.atr_stop_mult or 'off'}")
+          f"buy>{args.buy_thr} sell<{args.sell_thr} | exit_thr={args.exit_thr or 'off'} | "
+          f"fng={'filter' if args.fng_filter else 'features' if not args.no_fng_features else 'off'} | "
+          f"atr_stop={args.atr_stop_mult or 'off'}")
     print("Running walk-forward (retrain on past only)...\n")
 
     results = []
@@ -259,6 +283,9 @@ def main() -> None:
             symbol, data, args.horizon, args.buy_thr, args.sell_thr, args.fee,
             args.leverage, args.model, args.train_min, args.retrain_every,
             args.atr_stop_mult, args.atr_period,
+            exit_thr=args.exit_thr,
+            use_fng_features=not args.no_fng_features,
+            use_fng_filter=args.fng_filter,
             margin_open_fee=args.margin_open_fee, rollover_fee=args.rollover_fee,
         )
         results.append(r)

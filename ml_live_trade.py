@@ -46,9 +46,12 @@ SYMBOLS = [s.strip() for s in os.getenv(
     'ML_LIVE_SYMBOLS', 'XRP-USD,ADA-USD,SOL-USD,LINK-USD,DOGE-USD').split(',') if s.strip()]
 PERIOD = os.getenv('ML_LIVE_PERIOD', '720d')
 INTERVAL = os.getenv('ML_LIVE_INTERVAL', '1h')
-HORIZON = int(os.getenv('ML_LIVE_HORIZON', '48'))
-BUY_THR = float(os.getenv('ML_LIVE_BUY_THR', '0.65'))
+HORIZON = int(os.getenv('ML_LIVE_HORIZON', '72'))
+BUY_THR = float(os.getenv('ML_LIVE_BUY_THR', '0.68'))
 SELL_THR = float(os.getenv('ML_LIVE_SELL_THR', '0.35'))
+EXIT_THR = float(os.getenv('ML_LIVE_EXIT_THR', '0.40'))
+USE_FNG_FEATURES = os.getenv('ML_LIVE_FNG_FEATURES', 'true').lower() == 'true'
+USE_FNG_FILTER = os.getenv('ML_LIVE_FNG_FILTER', 'true').lower() == 'true'
 LEVERAGE = int(os.getenv('ML_LIVE_LEVERAGE', '2'))
 POSITION_FRACTION = float(os.getenv('ML_LIVE_POSITION_FRACTION', '0.20'))
 MAX_OPEN = int(os.getenv('ML_LIVE_MAX_OPEN', '5'))
@@ -156,7 +159,11 @@ def main() -> None:
     config = Config()
     kraken = KrakenClient(config.KRAKEN_API_KEY, config.KRAKEN_API_SECRET, config.KRAKEN_API_URL)
     telegram = Telegram(config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_CHAT_ID)
-    strategy = MLSwingStrategy(horizon=HORIZON, buy_thr=BUY_THR, sell_thr=SELL_THR)
+    strategy = MLSwingStrategy(
+        horizon=HORIZON, buy_thr=BUY_THR, sell_thr=SELL_THR, exit_thr=EXIT_THR,
+        use_fng_features=USE_FNG_FEATURES, use_fng_filter=USE_FNG_FILTER,
+        long_only=LONG_ONLY,
+    )
     pairs = pair_map(config)
 
     mode = "🧪 DRY-RUN (no real orders)" if DRY_RUN else "💰 REAL MONEY"
@@ -187,14 +194,19 @@ def main() -> None:
         return
     usable_margin = available_margin / MARGIN_SAFETY_FACTOR
 
-    # ── 1) Close positions whose ~2-day hold is complete ──
+    # ── 1) Close positions: time limit OR model says bail early ──
     for symbol in list(state['open'].keys()):
         pos = state['open'][symbol]
         df = data_by_symbol.get(symbol)
         if df is None:
             continue
         now = df.index[-1]
-        if now < pd.Timestamp(pos['exit_due']):
+        time_due = now >= pd.Timestamp(pos['exit_due'])
+        early_exit = False
+        exit_prob = pos.get('prob_up', 0.5)
+        if not time_due and pos['direction'] == 'long' and EXIT_THR > 0:
+            early_exit, exit_prob = strategy.should_exit_early(df)
+        if not time_due and not early_exit:
             continue
 
         current_price = float(df['Close'].iloc[-1])
@@ -207,10 +219,13 @@ def main() -> None:
                 pnl_pct = (current_price - pos['entry_price']) / pos['entry_price'] * 100 * LEVERAGE
             else:
                 pnl_pct = (pos['entry_price'] - current_price) / pos['entry_price'] * 100 * LEVERAGE
+            reason = 'model_exit' if early_exit else 'time'
             state['closed'].append({**pos, 'symbol': symbol, 'exit_price': current_price,
-                                    'exit_time': str(now), 'pnl_pct': round(pnl_pct, 3)})
+                                    'exit_time': str(now), 'pnl_pct': round(pnl_pct, 3),
+                                    'exit_reason': reason, 'exit_prob_up': round(exit_prob, 3)})
             del state['open'][symbol]
-            actions.append(f"CLOSE {symbol} {pos['direction']} @ {current_price:.4f} -> {pnl_pct:+.2f}%")
+            tag = f" ({reason}, p_up={exit_prob:.2f})" if early_exit else ""
+            actions.append(f"CLOSE {symbol} {pos['direction']} @ {current_price:.4f} -> {pnl_pct:+.2f}%{tag}")
         except Exception as e:
             actions.append(f"⚠️ close {symbol} failed: {e}")
 
@@ -227,6 +242,8 @@ def main() -> None:
 
         sig = strategy.get_signal(df)
         if sig.signal not in ('BUY', 'SELL'):
+            if sig.blocked_reason == 'fng_fear_bucket':
+                actions.append(f"skip {symbol}: F&G fear bucket 25-40 (p_up={sig.prob_up:.2f})")
             continue
         if LONG_ONLY and sig.signal == 'SELL':
             actions.append(f"skip {symbol}: SELL signal ignored (long-only mode, p_up={sig.prob_up:.2f})")

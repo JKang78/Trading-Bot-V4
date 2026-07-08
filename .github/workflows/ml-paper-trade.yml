@@ -1,12 +1,12 @@
 name: ML Strategy Paper Trading
 
-# Paper-trades the validated longer-horizon ML strategy on live data.
-# It places NO real orders. It only simulates and sends Telegram updates,
-# so we can confirm the backtested edge holds forward before risking money.
+# Paper-trades the V2 ML strategy on live data (no real orders).
+# V2: h=72, thr=0.68, Fear&Greed features, adaptive exit, F&G filter.
+# Backtested +6.30% expectancy/trade, PF 2.18 (walk-forward, honest fees).
 
 on:
   schedule:
-    - cron: '0 * * * *'   # hourly (data is 1h; holds are ~2 days)
+    - cron: '0 * * * *'   # hourly (data is 1h; holds are ~3 days)
   workflow_dispatch:
 
 jobs:
@@ -44,8 +44,17 @@ jobs:
       env:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        ML_PAPER_SYMBOLS: 'XRP-USD,ADA-USD,SOL-USD,LINK-USD,DOGE-USD'
+        ML_PAPER_HORIZON: '72'
+        ML_PAPER_BUY_THR: '0.68'
+        ML_PAPER_SELL_THR: '0'
+        ML_PAPER_EXIT_THR: '0.40'
+        ML_PAPER_FNG_FEATURES: 'true'
+        ML_PAPER_FNG_FILTER: 'true'
+        ML_PAPER_LEVERAGE: '2'
+        ML_PAPER_FEE: '0.0021'
       run: |
-        echo "ML PAPER TRADING (no real money)"
+        echo "ML PAPER TRADING V2 (no real money)"
         echo "Date: $(date)"
         python ml_paper_trade.py
 
