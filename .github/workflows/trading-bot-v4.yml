@@ -1,10 +1,10 @@
 name: Kraken Trading Bot V4
 
-# Old V4 swing bot live test. The ML live workflow schedule is paused so only
-# one bot controls the Kraken account.
+# Automatic schedule paused. The AI Strategy Router workflow is now the single
+# scheduled live controller and may choose this old V4 strategy.
 on:
-  schedule:
-    - cron: '*/15 * * * *'
+  # schedule:
+  #   - cron: '*/15 * * * *'
 
   workflow_dispatch:
     inputs:

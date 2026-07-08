@@ -947,6 +947,32 @@ PORTFOLIO_REPORT_PRINT_STDOUT=false
 
 ---
 
+## 🧭 AI Strategy Router
+
+`strategy_router.py` runs the old V4 swing strategy plus ML V2/V3 in signal-only mode, asks OpenAI for a structured routing and per-version budget decision, then enforces hard local risk caps before any order can be placed.
+
+GitHub workflow: `.github/workflows/strategy-router.yml`
+
+Required GitHub secret:
+
+```bash
+OPENAI_API_KEY
+```
+
+Safety defaults:
+
+```bash
+ROUTER_MAX_OPEN_POSITIONS=1
+ROUTER_MAX_TRADE_MARGIN_FRACTION=0.25
+ROUTER_MAX_TOTAL_MARGIN_FRACTION=0.35
+ROUTER_MAX_LEVERAGE=2
+ROUTER_ML_STRATEGIES=v2,v3
+```
+
+The old V4 and ML live workflows remain manually runnable, but their automatic schedules are paused so the router is the only scheduled live controller.
+
+---
+
 ## ✅ Final Checklist
 
 Before pushing:
