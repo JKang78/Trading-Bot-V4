@@ -235,11 +235,12 @@ def position_rows(positions: dict, tickers: TickerCache, limit: int) -> tuple[li
 
     for pos_id, pos in items[:limit]:
         pair = pos.get("pair") or pos_id
-        side = str(pos.get("type", "?")).upper()
+        raw_side = str(pos.get("type", "?")).lower()
+        side = {"buy": "LONG", "sell": "SHORT"}.get(raw_side, raw_side.upper())
         vol = (as_float(pos.get("vol"), 0.0) or 0.0) - (as_float(pos.get("vol_closed"), 0.0) or 0.0)
         cost = as_float(pos.get("cost"), 0.0) or 0.0
         margin = as_float(pos.get("margin"), 0.0) or 0.0
-        leverage = as_float(pos.get("leverage"), 1.0) or 1.0
+        leverage = as_float(pos.get("leverage"))
         entry = cost / vol if vol else None
 
         ticker = tickers.get(pair)
@@ -263,10 +264,19 @@ def position_rows(positions: dict, tickers: TickerCache, limit: int) -> tuple[li
         last_text = money(last) if last is not None else "n/a"
         pnl_text = f"{money(pnl_value)} ({pct(pnl_pct)})" if pnl_value is not None else "n/a"
         margin_text = money(margin) if margin else "n/a"
+        if leverage is not None:
+            exposure_text = f"lev {leverage:g}x"
+        elif margin:
+            exposure_text = f"margin position, notional/margin {cost / margin:.2f}x"
+        else:
+            exposure_text = "margin position"
+
+        terms = pos.get("terms")
+        terms_text = f"; terms {terms}" if terms else ""
 
         rows.append(
             f"- {display_pair(pair)} {side} {quantity(vol)} @ {entry_text} -> {last_text}; "
-            f"P/L {pnl_text}; margin {margin_text}; lev {leverage:g}x"
+            f"P/L {pnl_text}; margin {margin_text}; {exposure_text}; id {pos_id}{terms_text}"
         )
 
     return rows, len(items)
@@ -388,7 +398,7 @@ def build_report(config: Config, kraken: KrakenClient) -> tuple[str, dict]:
         "<b>Daily Portfolio Update</b>",
         "",
         *html_section("Account", account_rows),
-        *html_section("Open Kraken Positions", pos_rows),
+        *html_section("Open Kraken Margin Positions", pos_rows),
         *html_section("Balances", bal_rows or ["- None"]),
         *html_section("Open Orders", order_rows(orders)),
         *html_section("ML Bot State", ml_state_rows(state_file)),
