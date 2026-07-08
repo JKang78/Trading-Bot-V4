@@ -31,7 +31,19 @@ import pandas as pd
 # Reuse the same data + feature code so research and backtest stay consistent.
 from backtest import get_history, compute_atr
 from research_edge import build_labels, make_model
-from ml_strategy import build_enhanced_features, passes_fng_filter
+from ml_strategy import (
+    KrakenCostModel,
+    btc_regime_state,
+    build_cost_aware_labels,
+    build_enhanced_features,
+    compute_btc_regime_frame,
+    dynamic_probability_threshold,
+    estimate_payoff_stats,
+    expected_value,
+    passes_fng_filter,
+    recent_volatility,
+    relative_strength_7d,
+)
 
 
 def backtest_symbol(
@@ -53,10 +65,32 @@ def backtest_symbol(
     starting_equity: float = 1000.0,
     margin_open_fee: float = 0.0002,
     rollover_fee: float = 0.0002,
+    btc_data: pd.DataFrame | None = None,
+    cost_model: KrakenCostModel | None = None,
+    use_cost_aware_labels: bool = False,
+    use_btc_features: bool = False,
+    use_btc_regime_filter: bool = False,
+    use_relative_strength_filter: bool = False,
+    use_expected_value_filter: bool = False,
+    ev_cost_multiplier: float = 1.5,
 ) -> dict:
     """Run the walk-forward backtest for one coin and return its stats."""
-    feats = build_enhanced_features(data, use_fng_features)
-    labels, _fwd = build_labels(data, horizon)
+    cost_model = cost_model or KrakenCostModel(
+        maker_entry_fee=fee_rate,
+        taker_entry_fee=fee_rate,
+        taker_exit_fee=fee_rate,
+        margin_open_fee=margin_open_fee,
+        margin_rollover_fee_4h=rollover_fee,
+        spread_buffer=0.0,
+        slippage_buffer=0.0,
+        minimum_edge=0.0,
+    )
+    btc_for_features = btc_data if (use_btc_features and btc_data is not None) else None
+    feats = build_enhanced_features(data, use_fng_features, btc_for_features)
+    if use_cost_aware_labels:
+        labels, _fwd = build_cost_aware_labels(data, horizon, cost_model)
+    else:
+        labels, _fwd = build_labels(data, horizon)
 
     feature_cols = list(feats.columns)
     X_all = feats.values
@@ -65,15 +99,18 @@ def backtest_symbol(
     high = data['High'].values
     low = data['Low'].values
     atr_all = compute_atr(data, atr_period).values if atr_stop_mult > 0 else None
+    btc_regimes = compute_btc_regime_frame(btc_data) if btc_data is not None else pd.DataFrame()
+    rs_7d = relative_strength_7d(data, btc_data) if btc_data is not None else None
 
     n = len(data)
     # A row is usable as a feature only if none of its features are NaN.
     valid_feat = ~np.isnan(X_all).any(axis=1)
 
-    fee_cost_pct = fee_rate * 100 * leverage * 2  # round-trip fee, % of margin
+    fee_cost_pct = fee_rate * 100 * leverage * 2  # legacy round-trip fee, % of margin
 
     model = None
     last_train_pos = -10**9
+    last_train_mask = None
 
     trades = []
     equity = starting_equity
@@ -89,7 +126,7 @@ def backtest_symbol(
             continue
 
         # ---- Retrain periodically, using ONLY data whose label is known ----
-        # A sample at position j only has a valid 48h label once we are at least
+        # A sample at position j only has a valid label once we are at least
         # `horizon` bars past it, so we train on rows with index <= i - horizon.
         if model is None or (i - last_train_pos) >= retrain_every:
             train_upto = i - horizon
@@ -101,6 +138,7 @@ def backtest_symbol(
                     model = make_model(model_name)
                     model.fit(X_all[mask], y_all[mask])
                     last_train_pos = i
+                    last_train_mask = mask
 
         if model is None:
             i += 1
@@ -108,7 +146,35 @@ def backtest_symbol(
 
         # ---- Decide whether to enter ----
         prob_up = float(model.predict_proba(X_all[i:i + 1])[:, 1][0])
-        if prob_up > buy_thr:
+
+        estimated_cost = cost_model.estimated_total_cost(horizon, 'maker')
+        avg_win, avg_loss = estimate_payoff_stats(_fwd, last_train_mask) if last_train_mask is not None else (0.0, 0.0)
+        dyn_thr = dynamic_probability_threshold(buy_thr, avg_win, avg_loss, estimated_cost)
+        ev = expected_value(prob_up, avg_win, avg_loss, estimated_cost)
+
+        if use_btc_regime_filter and btc_data is not None:
+            regime = btc_regime_state(btc_regimes, data.index[i])
+            if regime.block_new_entries:
+                i += 1
+                equity_curve.append(equity)
+                continue
+
+        rel_strength = 0.0
+        if rs_7d is not None:
+            rel_strength = float(rs_7d.iloc[i]) if not np.isnan(rs_7d.iloc[i]) else 0.0
+            if use_relative_strength_filter and rel_strength <= 0:
+                i += 1
+                equity_curve.append(equity)
+                continue
+
+        if use_expected_value_filter and not (
+            prob_up > dyn_thr and ev > 0 and ev > ev_cost_multiplier * estimated_cost
+        ):
+            i += 1
+            equity_curve.append(equity)
+            continue
+
+        if prob_up > dyn_thr:
             direction = 'long'
         elif prob_up < sell_thr:
             direction = 'short'
@@ -159,17 +225,18 @@ def backtest_symbol(
         else:
             gross_pct = (entry_price - exit_price) / entry_price * 100 * leverage
 
-        # Kraken margin costs the backtest previously ignored: an opening fee
-        # plus a rollover fee every 4 hours the position stays open. Both are
-        # charged on the full position value, so they scale with leverage.
-        # (Assumes 1h bars: bars_held == hours held.)
+        # Kraken margin costs: opening fee plus rollover every 4 hours.
         bars_held = exit_idx - i
-        margin_cost_pct = 0.0
-        if leverage > 1:
-            n_rollovers = bars_held // 4
-            margin_cost_pct = (margin_open_fee + rollover_fee * n_rollovers) * 100 * leverage
-
-        net_pct = gross_pct - fee_cost_pct - margin_cost_pct
+        if use_cost_aware_labels or use_expected_value_filter:
+            estimated_trade_cost = cost_model.estimated_total_cost(bars_held, 'maker')
+            margin_cost_pct = estimated_trade_cost * 100 * leverage
+            net_pct = gross_pct - margin_cost_pct
+        else:
+            margin_cost_pct = 0.0
+            if leverage > 1:
+                n_rollovers = bars_held // 4
+                margin_cost_pct = (margin_open_fee + rollover_fee * n_rollovers) * 100 * leverage
+            net_pct = gross_pct - fee_cost_pct - margin_cost_pct
 
         equity *= (1 + net_pct / 100)
         equity_curve.append(equity)
@@ -178,6 +245,11 @@ def backtest_symbol(
             'symbol': symbol,
             'direction': direction,
             'prob_up': round(prob_up, 3),
+            'dynamic_threshold': round(dyn_thr, 3),
+            'expected_value': round(ev, 5),
+            'estimated_cost': round(estimated_cost, 5),
+            'relative_strength_7d': round(rel_strength, 5),
+            'score': round(ev / recent_volatility(data.iloc[:i + 1]), 5),
             'entry_time': data.index[i],
             'exit_time': data.index[exit_idx],
             'entry_price': entry_price,
@@ -235,10 +307,10 @@ def main() -> None:
     parser.add_argument('--period', default='720d')
     parser.add_argument('--interval', default='1h')
     parser.add_argument('--horizon', type=int, default=72, help="Hold this many bars (~3 days at 1h).")
-    parser.add_argument('--buy-thr', type=float, default=0.68)
+    parser.add_argument('--buy-thr', type=float, default=0.70)
     parser.add_argument('--sell-thr', type=float, default=0.45)
     parser.add_argument('--exit-thr', type=float, default=0.40,
-                        help="Close long early if P(up) drops below this (0=off).")
+                        help="Close long early if model probability drops below this (0=off).")
     parser.add_argument('--no-fng-features', action='store_true',
                         help="Disable Fear & Greed features.")
     parser.add_argument('--fng-filter', action='store_true',
@@ -256,13 +328,45 @@ def main() -> None:
                         help="Kraken rollover fee per 4h held, on position value (0.0002 = 0.02%%).")
     parser.add_argument('--long-only', action='store_true',
                         help="Ignore short signals (sets sell threshold to 0).")
+    parser.add_argument('--v3', action='store_true',
+                        help="Enable the validated V3 profit-margin profile: cost-aware labels.")
+    parser.add_argument('--cost-aware-labels', action='store_true')
+    parser.add_argument('--btc-features', action='store_true')
+    parser.add_argument('--btc-regime-filter', action='store_true')
+    parser.add_argument('--relative-strength-filter', action='store_true')
+    parser.add_argument('--expected-value-filter', action='store_true')
+    parser.add_argument('--maker-entry-fee', type=float, default=0.0023)
+    parser.add_argument('--taker-entry-fee', type=float, default=0.0040)
+    parser.add_argument('--taker-exit-fee', type=float, default=0.0040)
+    parser.add_argument('--spread-buffer', type=float, default=0.0005)
+    parser.add_argument('--slippage-buffer', type=float, default=0.0010)
+    parser.add_argument('--minimum-edge', type=float, default=0.0075)
+    parser.add_argument('--ev-cost-multiplier', type=float, default=1.5)
     parser.add_argument('--out', default='ml_strategy_trades.csv')
     args = parser.parse_args()
 
     if args.long_only:
         args.sell_thr = 0.0
+    if args.v3:
+        args.cost_aware_labels = True
+        if args.margin_open_fee == parser.get_default('margin_open_fee'):
+            args.margin_open_fee = 0.0004
+        if args.rollover_fee == parser.get_default('rollover_fee'):
+            args.rollover_fee = 0.0004
 
     symbols = [s.strip() for s in args.symbols.split(',') if s.strip()]
+    cost_model = KrakenCostModel(
+        maker_entry_fee=args.maker_entry_fee,
+        taker_entry_fee=args.taker_entry_fee,
+        taker_exit_fee=args.taker_exit_fee,
+        margin_open_fee=args.margin_open_fee,
+        margin_rollover_fee_4h=args.rollover_fee,
+        spread_buffer=args.spread_buffer,
+        slippage_buffer=args.slippage_buffer,
+        minimum_edge=args.minimum_edge,
+    )
+    needs_btc = args.btc_features or args.btc_regime_filter or args.relative_strength_filter
+    btc_data = get_history('BTC-USD', args.period, args.interval) if needs_btc else None
 
     print(f"ML strategy backtest | model={args.model} | horizon={args.horizon}b | "
           f"lev={args.leverage}x | fee={args.fee * 100:.2f}%/side | "
@@ -270,6 +374,11 @@ def main() -> None:
           f"buy>{args.buy_thr} sell<{args.sell_thr} | exit_thr={args.exit_thr or 'off'} | "
           f"fng={'filter' if args.fng_filter else 'features' if not args.no_fng_features else 'off'} | "
           f"atr_stop={args.atr_stop_mult or 'off'}")
+    if args.v3 or args.cost_aware_labels or args.expected_value_filter:
+        print(f"V3 gates | cost_labels={args.cost_aware_labels} btc_features={args.btc_features} "
+              f"btc_regime={args.btc_regime_filter} rs_filter={args.relative_strength_filter} "
+              f"ev_filter={args.expected_value_filter} min_edge={args.minimum_edge * 100:.2f}% "
+              f"spread={args.spread_buffer * 100:.2f}% slippage={args.slippage_buffer * 100:.2f}%")
     print("Running walk-forward (retrain on past only)...\n")
 
     results = []
@@ -287,6 +396,14 @@ def main() -> None:
             use_fng_features=not args.no_fng_features,
             use_fng_filter=args.fng_filter,
             margin_open_fee=args.margin_open_fee, rollover_fee=args.rollover_fee,
+            btc_data=btc_data,
+            cost_model=cost_model,
+            use_cost_aware_labels=args.cost_aware_labels,
+            use_btc_features=args.btc_features,
+            use_btc_regime_filter=args.btc_regime_filter,
+            use_relative_strength_filter=args.relative_strength_filter,
+            use_expected_value_filter=args.expected_value_filter,
+            ev_cost_multiplier=args.ev_cost_multiplier,
         )
         results.append(r)
         all_trades.extend(r.get('trades', []))

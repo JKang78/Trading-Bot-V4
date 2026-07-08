@@ -101,7 +101,9 @@ def build_labels(data: pd.DataFrame, horizon: int) -> pd.Series:
     target, never as a feature.
     """
     future_return = data['Close'].shift(-horizon) / data['Close'] - 1
-    return (future_return > 0).astype(int), future_return
+    labels = pd.Series(np.where(future_return > 0, 1.0, 0.0), index=data.index)
+    labels[future_return.isna()] = np.nan
+    return labels, future_return
 
 
 def evaluate_symbol(symbol: str, data: pd.DataFrame, horizon: int,

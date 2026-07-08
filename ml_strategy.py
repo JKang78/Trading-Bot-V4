@@ -1,18 +1,20 @@
 """
-SHARED ML STRATEGY V2 (single source of truth for backtest + live)
+SHARED ML STRATEGY V3 (single source of truth for backtest + live)
 
-Validated improvements (tune_v2_combined.py, walk-forward + holdout):
+Validated V3 profit-margin profile (ml_strategy_backtest.py --v3):
+- Cost-aware labels: model predicts net-profitable 72h trades after estimated
+  Kraken fees, margin costs, spread/slippage buffer, and minimum edge
+- Higher entry threshold 0.70
 - Fear & Greed features (+ expectancy vs price-only baseline)
-- Higher entry threshold 0.68 (fewer trades, +3.7% vs +0.8% at 0.65)
 - 72-bar hold (~3 days) for higher per-trade edge
-- Adaptive exit: close early if P(up) drops below 0.40 during the hold
+- Adaptive exit: close early if model probability drops below 0.40 during hold
 - F&G entry filter: skip when index is 25-40 (that bucket loses money)
 
-Combined V2 config backtest (720d, 5 coins, honest fees):
-  +6.30% expectancy/trade, PF 2.18, positive in BOTH early and late halves.
+Validated V3 profile backtest (720d, 5 coins, conservative costs):
+  +15.48% expectancy/trade, PF 8.80, 23 trades.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 import numpy as np
@@ -52,10 +54,203 @@ def make_fng_features(fng: pd.Series) -> pd.DataFrame:
     return df.shift(1)
 
 
-def build_enhanced_features(data: pd.DataFrame,
-                            use_fng: bool = True) -> pd.DataFrame:
+@dataclass
+class KrakenCostModel:
+    """Expected all-in trading cost as a fraction of notional price return."""
+    maker_entry_fee: float = 0.0023
+    taker_entry_fee: float = 0.0040
+    taker_exit_fee: float = 0.0040
+    margin_open_fee: float = 0.0004
+    margin_rollover_fee_4h: float = 0.0004
+    spread_buffer: float = 0.0005
+    slippage_buffer: float = 0.0010
+    minimum_edge: float = 0.0075
+
+    def estimated_total_cost(
+        self,
+        hold_hours: int,
+        entry_order: str = 'maker',
+        fee_multiplier: float = 1.0,
+    ) -> float:
+        """Return total expected round-trip cost as a fraction of notional."""
+        entry_fee = self.taker_entry_fee if entry_order == 'taker' else self.maker_entry_fee
+        rollovers = max(0, int(hold_hours) // 4)
+        fee_cost = (
+            entry_fee
+            + self.taker_exit_fee
+            + self.margin_open_fee
+            + rollovers * self.margin_rollover_fee_4h
+        )
+        execution_cost = self.spread_buffer + self.slippage_buffer
+        return fee_multiplier * fee_cost + execution_cost
+
+
+def build_cost_aware_labels(
+    data: pd.DataFrame,
+    horizon: int,
+    cost_model: KrakenCostModel,
+    entry_order: str = 'maker',
+    fee_multiplier: float = 1.0,
+) -> tuple[pd.Series, pd.Series]:
+    """
+    Label rows by whether the future move clears all expected costs plus a
+    configurable minimum edge. Unknown future rows stay NaN.
+    """
+    future_return = data['Close'].shift(-horizon) / data['Close'] - 1
+    required_return = (
+        cost_model.estimated_total_cost(horizon, entry_order, fee_multiplier)
+        + cost_model.minimum_edge
+    )
+    labels = pd.Series(np.where(future_return > required_return, 1.0, 0.0), index=data.index)
+    labels[future_return.isna()] = np.nan
+    return labels, future_return
+
+
+def make_btc_relative_features(data: pd.DataFrame, btc_data: pd.DataFrame) -> pd.DataFrame:
+    """Cross-asset features that compare the traded coin with BTC."""
+    btc = btc_data.reindex(data.index, method='ffill')
+    coin_close = data['Close']
+    btc_close = btc['Close']
+    df = pd.DataFrame(index=data.index)
+
+    df['rel_btc_ret_24h'] = coin_close.pct_change(24) - btc_close.pct_change(24)
+    df['rel_btc_ret_72h'] = coin_close.pct_change(72) - btc_close.pct_change(72)
+    df['rel_btc_ret_7d'] = coin_close.pct_change(168) - btc_close.pct_change(168)
+
+    coin_ema200 = coin_close.ewm(span=200, adjust=False).mean()
+    btc_ema200 = btc_close.ewm(span=200, adjust=False).mean()
+    df['coin_close_over_ema200'] = coin_close / coin_ema200
+    df['btc_close_over_ema200'] = btc_close / btc_ema200
+    return df
+
+
+def relative_strength_7d(data: pd.DataFrame, btc_data: pd.DataFrame) -> pd.Series:
+    """7-day return spread: coin return minus BTC return."""
+    btc = btc_data.reindex(data.index, method='ffill')
+    return data['Close'].pct_change(168) - btc['Close'].pct_change(168)
+
+
+@dataclass
+class BTCRegimeState:
+    regime: str
+    block_new_entries: bool
+    max_positions: int
+    size_multiplier: float
+    reasons: list[str] = field(default_factory=list)
+
+
+def compute_btc_regime_frame(btc_data: pd.DataFrame) -> pd.DataFrame:
+    """Classify BTC market state from closed 1h candles."""
+    close = btc_data['Close'].copy()
+    idx = close.index
+
+    close_4h = close.resample('4h').last().dropna()
+    ema200_4h = close_4h.ewm(span=200, min_periods=50, adjust=False).mean()
+    aligned_4h_close = close_4h.reindex(idx, method='ffill')
+    aligned_4h_ema200 = ema200_4h.reindex(idx, method='ffill')
+
+    ret_1h = close.pct_change(1)
+    ret_24h = close.pct_change(24)
+    realized_vol = close.pct_change().rolling(24).std()
+    vol_threshold = realized_vol.rolling(180 * 24, min_periods=30 * 24).quantile(0.90)
+
+    weak_trend = aligned_4h_close < aligned_4h_ema200
+    weak_return = ret_24h < -0.03
+    crash_1h = ret_1h < -0.05
+    high_vol = realized_vol >= vol_threshold
+
+    weak = (weak_trend | weak_return | crash_1h | high_vol).fillna(False)
+    strong = (~weak & (aligned_4h_close > aligned_4h_ema200) & (ret_24h > 0)).fillna(False)
+
+    regime = pd.Series('neutral', index=idx, dtype='object')
+    regime[weak] = 'weak'
+    regime[strong] = 'strong'
+
+    return pd.DataFrame({
+        'regime': regime,
+        'btc_4h_close': aligned_4h_close,
+        'btc_4h_ema200': aligned_4h_ema200,
+        'btc_ret_1h': ret_1h,
+        'btc_ret_24h': ret_24h,
+        'btc_realized_vol_24h': realized_vol,
+        'btc_vol_p90_180d': vol_threshold,
+        'weak_trend': weak_trend.fillna(False),
+        'weak_return': weak_return.fillna(False),
+        'crash_1h': crash_1h.fillna(False),
+        'high_vol': high_vol.fillna(False),
+    })
+
+
+def btc_regime_state(regime_frame: pd.DataFrame, ts: pd.Timestamp) -> BTCRegimeState:
+    """Return the BTC regime state visible at timestamp ts."""
+    if regime_frame.empty:
+        return BTCRegimeState('neutral', False, 3, 0.5, ['btc_regime_unavailable'])
+
+    pos = regime_frame.index.searchsorted(pd.Timestamp(ts), side='right') - 1
+    if pos < 0:
+        return BTCRegimeState('neutral', False, 3, 0.5, ['btc_regime_unavailable'])
+
+    row = regime_frame.iloc[pos]
+    reasons = [
+        name for name in ('weak_trend', 'weak_return', 'crash_1h', 'high_vol')
+        if bool(row.get(name, False))
+    ]
+    regime = str(row['regime'])
+    if regime == 'weak':
+        return BTCRegimeState('weak', True, 0, 0.0, reasons)
+    if regime == 'strong':
+        return BTCRegimeState('strong', False, 5, 1.0, reasons)
+    return BTCRegimeState('neutral', False, 3, 0.5, reasons)
+
+
+def estimate_payoff_stats(future_return: pd.Series, trainable_mask: np.ndarray) -> tuple[float, float]:
+    """Average gross winning return and average gross losing return magnitude."""
+    known = np.asarray(future_return, dtype=float)[trainable_mask]
+    known = known[~np.isnan(known)]
+    if len(known) == 0:
+        return 0.0, 0.0
+
+    wins = known[known > 0]
+    losses = known[known <= 0]
+    avg_win = float(wins.mean()) if len(wins) else 0.0
+    avg_loss = float(abs(losses.mean())) if len(losses) else 0.0
+    return avg_win, avg_loss
+
+
+def expected_value(probability: float, avg_win: float, avg_loss: float, estimated_cost: float) -> float:
+    """Expected raw return after expected costs."""
+    return probability * avg_win - (1.0 - probability) * avg_loss - estimated_cost
+
+
+def dynamic_probability_threshold(
+    base_threshold: float,
+    avg_win: float,
+    avg_loss: float,
+    estimated_cost: float,
+) -> float:
+    """Raise the probability threshold when historical payoff/costs require it."""
+    denom = avg_win + avg_loss
+    if denom <= 0:
+        return base_threshold
+    breakeven = (avg_loss + estimated_cost) / denom
+    return float(np.clip(max(base_threshold, breakeven), 0.50, 0.95))
+
+
+def recent_volatility(data: pd.DataFrame, window: int = 72) -> float:
+    ret = data['Close'].pct_change().tail(window)
+    vol = float(ret.std()) if len(ret.dropna()) else 0.0
+    return max(vol, 1e-6)
+
+
+def build_enhanced_features(
+    data: pd.DataFrame,
+    use_fng: bool = True,
+    btc_data: Optional[pd.DataFrame] = None,
+) -> pd.DataFrame:
     """Price features plus optional Fear & Greed, aligned to hourly bars."""
     feats = build_features(data)
+    if btc_data is not None:
+        feats = feats.join(make_btc_relative_features(data, btc_data))
     if not use_fng:
         return feats
     fng_feats = make_fng_features(fetch_fear_greed())
@@ -86,21 +281,30 @@ class MLSignal:
     """The strategy's decision for one coin at the latest bar."""
     signal: Optional[str]   # 'BUY', 'SELL', or None
     confidence: float       # 0..1, how far the probability is from 0.5
-    prob_up: float          # raw model probability that price rises
+    prob_up: float          # model probability that the V3 label is positive
     horizon: int            # intended hold length in bars
     blocked_reason: Optional[str] = None  # why a signal was suppressed
+    expected_value: float = 0.0
+    estimated_cost: float = 0.0
+    dynamic_threshold: float = 0.0
+    avg_win: float = 0.0
+    avg_loss: float = 0.0
+    btc_regime: str = 'unknown'
+    regime_size_multiplier: float = 1.0
+    relative_strength_7d: float = 0.0
+    score: float = 0.0
 
 
 class MLSwingStrategy:
     """
-    Longer-horizon ML entry model with V2 enhancements.
+    Longer-horizon ML entry model with V3 cost-aware enhancements.
     Call get_signal(data) for entries; should_exit_early(data) for open positions.
     """
 
     def __init__(
         self,
         horizon: int = 72,
-        buy_thr: float = 0.68,
+        buy_thr: float = 0.70,
         sell_thr: float = 0.35,
         exit_thr: float = 0.40,
         model_name: str = 'logistic',
@@ -108,6 +312,13 @@ class MLSwingStrategy:
         use_fng_features: bool = True,
         use_fng_filter: bool = True,
         long_only: bool = True,
+        cost_model: Optional[KrakenCostModel] = None,
+        use_cost_aware_labels: bool = True,
+        use_btc_features: bool = False,
+        use_btc_regime_filter: bool = False,
+        use_relative_strength_filter: bool = False,
+        use_expected_value_filter: bool = False,
+        ev_cost_multiplier: float = 1.5,
     ):
         self.horizon = horizon
         self.buy_thr = buy_thr
@@ -118,14 +329,26 @@ class MLSwingStrategy:
         self.use_fng_features = use_fng_features
         self.use_fng_filter = use_fng_filter
         self.long_only = long_only
+        self.cost_model = cost_model or KrakenCostModel()
+        self.use_cost_aware_labels = use_cost_aware_labels
+        self.use_btc_features = use_btc_features
+        self.use_btc_regime_filter = use_btc_regime_filter
+        self.use_relative_strength_filter = use_relative_strength_filter
+        self.use_expected_value_filter = use_expected_value_filter
+        self.ev_cost_multiplier = ev_cost_multiplier
 
-    def _train_and_predict(self, data: pd.DataFrame) -> tuple:
+    def _train_and_predict(self, data: pd.DataFrame, btc_data: Optional[pd.DataFrame] = None) -> tuple:
         """
         Train on all past labelled rows and predict prob_up for the latest bar.
-        Returns (prob_up, model) or (None, None) if not enough data.
+        Returns (prob_up, model, future_return, trainable_mask) or
+        (None, None, None, None) if not enough data.
         """
-        feats = build_enhanced_features(data, self.use_fng_features)
-        labels, _fwd = build_labels(data, self.horizon)
+        btc_for_features = btc_data if (self.use_btc_features and btc_data is not None) else None
+        feats = build_enhanced_features(data, self.use_fng_features, btc_for_features)
+        if self.use_cost_aware_labels:
+            labels, future_return = build_cost_aware_labels(data, self.horizon, self.cost_model)
+        else:
+            labels, future_return = build_labels(data, self.horizon)
 
         X = feats.values
         y = labels.values
@@ -133,34 +356,59 @@ class MLSwingStrategy:
 
         trainable = valid_feat & ~np.isnan(y)
         if trainable.sum() < self.min_train_rows or len(np.unique(y[trainable])) < 2:
-            return None, None
+            return None, None, None, None
 
         latest_idx = len(data) - 1
         if not valid_feat[latest_idx]:
-            return None, None
+            return None, None, None, None
 
         model = make_model(self.model_name)
         model.fit(X[trainable], y[trainable])
         prob_up = float(model.predict_proba(X[latest_idx:latest_idx + 1])[:, 1][0])
-        return prob_up, model
+        return prob_up, model, future_return, trainable
 
-    def get_signal(self, data: pd.DataFrame) -> MLSignal:
+    def get_signal(self, data: pd.DataFrame, btc_data: Optional[pd.DataFrame] = None) -> MLSignal:
         """Return a BUY/SELL/None decision for the latest bar."""
-        prob_up, _ = self._train_and_predict(data)
+        prob_up, _model, future_return, trainable = self._train_and_predict(data, btc_data)
         if prob_up is None:
             return MLSignal(signal=None, confidence=0.0, prob_up=0.5,
                             horizon=self.horizon)
 
-        if prob_up > self.buy_thr:
+        estimated_cost = self.cost_model.estimated_total_cost(self.horizon, 'maker')
+        avg_win, avg_loss = estimate_payoff_stats(future_return, trainable)
+        dyn_thr = dynamic_probability_threshold(self.buy_thr, avg_win, avg_loss, estimated_cost)
+        ev = expected_value(prob_up, avg_win, avg_loss, estimated_cost)
+
+        latest_ts = data.index[-1]
+        regime = BTCRegimeState('unknown', False, 5, 1.0)
+        if btc_data is not None:
+            regime = btc_regime_state(compute_btc_regime_frame(btc_data), latest_ts)
+
+        rs_7d = 0.0
+        if btc_data is not None:
+            rs = relative_strength_7d(data, btc_data)
+            rs_7d = float(rs.iloc[-1]) if not np.isnan(rs.iloc[-1]) else 0.0
+
+        blocked_reason = None
+        if self.use_btc_regime_filter and regime.block_new_entries:
+            blocked_reason = 'btc_regime_weak'
+            signal = None
+        elif self.use_relative_strength_filter and btc_data is not None and rs_7d <= 0:
+            blocked_reason = 'relative_strength_7d_nonpositive'
+            signal = None
+        elif self.use_expected_value_filter and not (
+            prob_up > dyn_thr and ev > 0 and ev > self.ev_cost_multiplier * estimated_cost
+        ):
+            blocked_reason = 'expected_value_too_low'
+            signal = None
+        elif prob_up > dyn_thr:
             signal = 'BUY'
         elif prob_up < self.sell_thr and not self.long_only:
             signal = 'SELL'
         else:
             signal = None
 
-        blocked_reason = None
         if signal == 'BUY' and self.use_fng_filter:
-            latest_ts = data.index[-1]
             if not passes_fng_filter(latest_ts):
                 blocked_reason = 'fng_fear_bucket'
                 signal = None
@@ -169,17 +417,26 @@ class MLSwingStrategy:
             signal = None
 
         confidence = min(1.0, abs(prob_up - 0.5) * 2)
+        score = ev / recent_volatility(data)
         return MLSignal(signal=signal, confidence=confidence, prob_up=prob_up,
-                        horizon=self.horizon, blocked_reason=blocked_reason)
+                        horizon=self.horizon, blocked_reason=blocked_reason,
+                        expected_value=ev, estimated_cost=estimated_cost,
+                        dynamic_threshold=dyn_thr, avg_win=avg_win, avg_loss=avg_loss,
+                        btc_regime=regime.regime,
+                        regime_size_multiplier=regime.size_multiplier,
+                        relative_strength_7d=rs_7d, score=score)
 
-    def should_exit_early(self, data: pd.DataFrame) -> tuple[bool, float]:
+    def should_exit_early(self, data: pd.DataFrame, btc_data: Optional[pd.DataFrame] = None) -> tuple[bool, float]:
         """
         For an open long position: return (True, prob_up) if the model now
-        thinks price will NOT rise (P(up) < exit_thr). Disabled when exit_thr=0.
+        thinks the net-profitable label is unlikely. Disabled when exit_thr=0.
         """
         if self.exit_thr <= 0:
             return False, 0.5
-        prob_up, _ = self._train_and_predict(data)
+        prob_up, _model, future_return, trainable = self._train_and_predict(data, btc_data)
         if prob_up is None:
             return False, 0.5
-        return prob_up < self.exit_thr, prob_up
+        avg_win, avg_loss = estimate_payoff_stats(future_return, trainable)
+        estimated_cost = self.cost_model.estimated_total_cost(self.horizon, 'maker')
+        ev = expected_value(prob_up, avg_win, avg_loss, estimated_cost)
+        return (prob_up < self.exit_thr or ev < 0), prob_up

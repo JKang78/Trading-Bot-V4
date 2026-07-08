@@ -1,12 +1,9 @@
-name: ML Strategy Paper Trading
+name: ML Strategy Paper Trading (DISABLED)
 
-# Paper-trades the V2 ML strategy on live data (no real orders).
-# V2: h=72, thr=0.68, Fear&Greed features, adaptive exit, F&G filter.
-# Backtested +6.30% expectancy/trade, PF 2.18 (walk-forward, honest fees).
+# Paper trading is disabled — live V3 runs in ml-live-trade.yml instead.
+# Kept for manual workflow_dispatch testing only.
 
 on:
-  schedule:
-    - cron: '0 * * * *'   # hourly (data is 1h; holds are ~3 days)
   workflow_dispatch:
 
 jobs:
@@ -46,15 +43,27 @@ jobs:
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         ML_PAPER_SYMBOLS: 'XRP-USD,ADA-USD,SOL-USD,LINK-USD,DOGE-USD'
         ML_PAPER_HORIZON: '72'
-        ML_PAPER_BUY_THR: '0.68'
+        ML_PAPER_BUY_THR: '0.70'
         ML_PAPER_SELL_THR: '0'
         ML_PAPER_EXIT_THR: '0.40'
         ML_PAPER_FNG_FEATURES: 'true'
         ML_PAPER_FNG_FILTER: 'true'
         ML_PAPER_LEVERAGE: '2'
         ML_PAPER_FEE: '0.0021'
+        ML_PAPER_MAKER_ENTRY_FEE: '0.0023'
+        ML_PAPER_TAKER_ENTRY_FEE: '0.0040'
+        ML_PAPER_TAKER_EXIT_FEE: '0.0040'
+        ML_PAPER_MARGIN_OPEN_FEE: '0.0004'
+        ML_PAPER_ROLLOVER_FEE_4H: '0.0004'
+        ML_PAPER_SPREAD_BUFFER: '0.0005'
+        ML_PAPER_SLIPPAGE_BUFFER: '0.0010'
+        ML_PAPER_MINIMUM_EDGE: '0.0075'
+        ML_PAPER_BTC_FEATURES: 'false'
+        ML_PAPER_BTC_REGIME_FILTER: 'false'
+        ML_PAPER_RELATIVE_STRENGTH_FILTER: 'false'
+        ML_PAPER_EXPECTED_VALUE_FILTER: 'false'
       run: |
-        echo "ML PAPER TRADING V2 (no real money)"
+        echo "ML PAPER TRADING V3 (no real money)"
         echo "Date: $(date)"
         python ml_paper_trade.py
 
