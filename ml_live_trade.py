@@ -3,7 +3,7 @@ REAL-MONEY LIVE TRADER for the longer-horizon ML strategy.
 
 ⚠️ THIS PLACES REAL ORDERS ON KRAKEN. ⚠️
 
-It trades the validated longer-horizon ML V3 strategy (see ml_strategy.py) with a
+It trades the ML strategy (V2 by default, V3 opt-in — see ml_strategy.py) with a
 few conservative, user-chosen settings:
 - Coins: XRP, ADA, SOL, LINK, DOGE (each passed walk-forward validation with
   positive expectancy in both the early and holdout periods).
@@ -41,52 +41,74 @@ from ml_strategy import (
     KrakenCostModel,
     MLSwingStrategy,
     btc_regime_state,
+    build_cost_model,
     compute_btc_regime_frame,
+    create_ml_strategy,
     expected_value,
+    get_strategy_profile,
 )
 
 
+def _env_str(name: str, default: str) -> str:
+    return os.getenv(name, default)
+
+
+def _env_float(name: str, default: float) -> float:
+    val = os.getenv(name)
+    return float(val) if val is not None else default
+
+
+def _env_int(name: str, default: int) -> int:
+    val = os.getenv(name)
+    return int(val) if val is not None else default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    val = os.getenv(name)
+    if val is None:
+        return default
+    return val.lower() == 'true'
+
+
 # ─────────────────────────── Settings (env-overridable) ───────────────────────────
-STATE_FILE = os.getenv('ML_LIVE_STATE_FILE', 'ml_live_state.json')
-SYMBOLS = [s.strip() for s in os.getenv(
+STRATEGY_VERSION = _env_str('ML_LIVE_STRATEGY', 'v2').lower()
+PROFILE = get_strategy_profile(STRATEGY_VERSION)
+STATE_FILE = _env_str('ML_LIVE_STATE_FILE', 'ml_live_state.json')
+SYMBOLS = [s.strip() for s in _env_str(
     'ML_LIVE_SYMBOLS', 'XRP-USD,ADA-USD,SOL-USD,LINK-USD,DOGE-USD').split(',') if s.strip()]
-PERIOD = os.getenv('ML_LIVE_PERIOD', '720d')
-INTERVAL = os.getenv('ML_LIVE_INTERVAL', '1h')
-HORIZON = int(os.getenv('ML_LIVE_HORIZON', '72'))
-BUY_THR = float(os.getenv('ML_LIVE_BUY_THR', '0.70'))
-SELL_THR = float(os.getenv('ML_LIVE_SELL_THR', '0.35'))
-EXIT_THR = float(os.getenv('ML_LIVE_EXIT_THR', '0.40'))
-USE_FNG_FEATURES = os.getenv('ML_LIVE_FNG_FEATURES', 'true').lower() == 'true'
-USE_FNG_FILTER = os.getenv('ML_LIVE_FNG_FILTER', 'true').lower() == 'true'
-LEVERAGE = int(os.getenv('ML_LIVE_LEVERAGE', '2'))
-POSITION_FRACTION = float(os.getenv('ML_LIVE_POSITION_FRACTION', '0.20'))
-MAX_OPEN = int(os.getenv('ML_LIVE_MAX_OPEN', '5'))
-MARGIN_SAFETY_FACTOR = float(os.getenv('ML_LIVE_MARGIN_SAFETY', '1.5'))
-DRY_RUN = os.getenv('ML_LIVE_DRY_RUN', 'false').lower() == 'true'
-
-# Long-only: backtests show longs earn ~+3.0%/trade vs ~+0.9% for shorts, and
-# shorts pay extra margin costs. Set ML_LIVE_LONG_ONLY=false to re-enable shorts.
-LONG_ONLY = os.getenv('ML_LIVE_LONG_ONLY', 'true').lower() == 'true'
-
-# Maker-first entries: try a post-only LIMIT order (cheaper maker fee ~0.16%)
-# and only fall back to a MARKET order (taker fee ~0.26%) if it doesn't fill
-# within MAKER_WAIT_SEC. Entries aren't time-critical for a ~2-day hold.
-USE_MAKER_ENTRY = os.getenv('ML_LIVE_MAKER_ENTRY', 'true').lower() == 'true'
-MAKER_WAIT_SEC = int(os.getenv('ML_LIVE_MAKER_WAIT_SEC', '90'))
-
-MAKER_ENTRY_FEE = float(os.getenv('ML_LIVE_MAKER_ENTRY_FEE', '0.0023'))
-TAKER_ENTRY_FEE = float(os.getenv('ML_LIVE_TAKER_ENTRY_FEE', '0.0040'))
-TAKER_EXIT_FEE = float(os.getenv('ML_LIVE_TAKER_EXIT_FEE', '0.0040'))
-MARGIN_OPEN_FEE = float(os.getenv('ML_LIVE_MARGIN_OPEN_FEE', '0.0004'))
-ROLLOVER_FEE_4H = float(os.getenv('ML_LIVE_ROLLOVER_FEE_4H', '0.0004'))
-SPREAD_BUFFER = float(os.getenv('ML_LIVE_SPREAD_BUFFER', '0.0005'))
-SLIPPAGE_BUFFER = float(os.getenv('ML_LIVE_SLIPPAGE_BUFFER', '0.0010'))
-MINIMUM_EDGE = float(os.getenv('ML_LIVE_MINIMUM_EDGE', '0.0075'))
-EV_COST_MULTIPLIER = float(os.getenv('ML_LIVE_EV_COST_MULTIPLIER', '1.5'))
-USE_BTC_FEATURES = os.getenv('ML_LIVE_BTC_FEATURES', 'false').lower() == 'true'
-USE_BTC_REGIME_FILTER = os.getenv('ML_LIVE_BTC_REGIME_FILTER', 'false').lower() == 'true'
-USE_RELATIVE_STRENGTH_FILTER = os.getenv('ML_LIVE_RELATIVE_STRENGTH_FILTER', 'false').lower() == 'true'
-USE_EXPECTED_VALUE_FILTER = os.getenv('ML_LIVE_EXPECTED_VALUE_FILTER', 'false').lower() == 'true'
+PERIOD = _env_str('ML_LIVE_PERIOD', '720d')
+INTERVAL = _env_str('ML_LIVE_INTERVAL', '1h')
+HORIZON = _env_int('ML_LIVE_HORIZON', PROFILE.horizon)
+BUY_THR = _env_float('ML_LIVE_BUY_THR', PROFILE.buy_thr)
+SELL_THR = _env_float('ML_LIVE_SELL_THR', 0.0 if PROFILE.long_only else 0.35)
+EXIT_THR = _env_float('ML_LIVE_EXIT_THR', PROFILE.exit_thr)
+USE_FNG_FEATURES = _env_bool('ML_LIVE_FNG_FEATURES', PROFILE.use_fng_features)
+USE_FNG_FILTER = _env_bool('ML_LIVE_FNG_FILTER', PROFILE.use_fng_filter)
+LEVERAGE = _env_int('ML_LIVE_LEVERAGE', 2)
+POSITION_FRACTION = _env_float('ML_LIVE_POSITION_FRACTION', 0.20)
+MAX_OPEN = _env_int('ML_LIVE_MAX_OPEN', 5)
+MARGIN_SAFETY_FACTOR = _env_float('ML_LIVE_MARGIN_SAFETY', 1.5)
+DRY_RUN = _env_bool('ML_LIVE_DRY_RUN', False)
+LONG_ONLY = _env_bool('ML_LIVE_LONG_ONLY', PROFILE.long_only)
+USE_MAKER_ENTRY = _env_bool('ML_LIVE_MAKER_ENTRY', True)
+MAKER_WAIT_SEC = _env_int('ML_LIVE_MAKER_WAIT_SEC', 90)
+MAKER_ENTRY_FEE = _env_float('ML_LIVE_MAKER_ENTRY_FEE', 0.0023)
+TAKER_ENTRY_FEE = _env_float('ML_LIVE_TAKER_ENTRY_FEE', 0.0040)
+TAKER_EXIT_FEE = _env_float('ML_LIVE_TAKER_EXIT_FEE', 0.0040)
+MARGIN_OPEN_FEE = _env_float('ML_LIVE_MARGIN_OPEN_FEE', PROFILE.margin_open_fee)
+ROLLOVER_FEE_4H = _env_float('ML_LIVE_ROLLOVER_FEE_4H', PROFILE.rollover_fee_4h)
+SPREAD_BUFFER = _env_float('ML_LIVE_SPREAD_BUFFER', 0.0005)
+SLIPPAGE_BUFFER = _env_float('ML_LIVE_SLIPPAGE_BUFFER', 0.0010)
+MINIMUM_EDGE = _env_float('ML_LIVE_MINIMUM_EDGE', PROFILE.minimum_edge)
+EV_COST_MULTIPLIER = _env_float('ML_LIVE_EV_COST_MULTIPLIER', PROFILE.ev_cost_multiplier)
+USE_COST_AWARE_LABELS = _env_bool('ML_LIVE_COST_AWARE_LABELS', PROFILE.use_cost_aware_labels)
+USE_BTC_FEATURES = _env_bool('ML_LIVE_BTC_FEATURES', PROFILE.use_btc_features)
+USE_BTC_REGIME_FILTER = _env_bool('ML_LIVE_BTC_REGIME_FILTER', PROFILE.use_btc_regime_filter)
+USE_RELATIVE_STRENGTH_FILTER = _env_bool('ML_LIVE_RELATIVE_STRENGTH_FILTER', PROFILE.use_relative_strength_filter)
+USE_EXPECTED_VALUE_FILTER = _env_bool('ML_LIVE_EXPECTED_VALUE_FILTER', PROFILE.use_expected_value_filter)
+USE_EV_EXIT = _env_bool('ML_LIVE_EV_EXIT', PROFILE.use_ev_exit)
+EV_GATED_MARKET_FALLBACK = _env_bool('ML_LIVE_EV_GATED_MARKET', PROFILE.ev_gated_market_fallback)
+USE_CONFIDENCE_SIZING = _env_bool('ML_LIVE_CONFIDENCE_SIZING', PROFILE.use_confidence_sizing)
 
 
 def confidence_size_multiplier(probability: float, threshold: float) -> float:
@@ -193,7 +215,8 @@ def main() -> None:
     config = Config()
     kraken = KrakenClient(config.KRAKEN_API_KEY, config.KRAKEN_API_SECRET, config.KRAKEN_API_URL)
     telegram = Telegram(config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_CHAT_ID)
-    cost_model = KrakenCostModel(
+    cost_model = build_cost_model(
+        PROFILE,
         maker_entry_fee=MAKER_ENTRY_FEE,
         taker_entry_fee=TAKER_ENTRY_FEE,
         taker_exit_fee=TAKER_EXIT_FEE,
@@ -203,20 +226,29 @@ def main() -> None:
         slippage_buffer=SLIPPAGE_BUFFER,
         minimum_edge=MINIMUM_EDGE,
     )
-    strategy = MLSwingStrategy(
-        horizon=HORIZON, buy_thr=BUY_THR, sell_thr=SELL_THR, exit_thr=EXIT_THR,
-        use_fng_features=USE_FNG_FEATURES, use_fng_filter=USE_FNG_FILTER,
-        long_only=LONG_ONLY, cost_model=cost_model,
+    strategy = create_ml_strategy(
+        PROFILE,
+        cost_model,
+        horizon=HORIZON,
+        buy_thr=BUY_THR,
+        sell_thr=SELL_THR,
+        exit_thr=EXIT_THR,
+        use_fng_features=USE_FNG_FEATURES,
+        use_fng_filter=USE_FNG_FILTER,
+        long_only=LONG_ONLY,
+        use_cost_aware_labels=USE_COST_AWARE_LABELS,
         use_btc_features=USE_BTC_FEATURES,
         use_btc_regime_filter=USE_BTC_REGIME_FILTER,
         use_relative_strength_filter=USE_RELATIVE_STRENGTH_FILTER,
         use_expected_value_filter=USE_EXPECTED_VALUE_FILTER,
         ev_cost_multiplier=EV_COST_MULTIPLIER,
+        use_ev_exit=USE_EV_EXIT,
     )
     pairs = pair_map(config)
 
     mode = "🧪 DRY-RUN (no real orders)" if DRY_RUN else "💰 REAL MONEY"
-    print(f"ML LIVE TRADER | {mode} | coins={SYMBOLS} | {POSITION_FRACTION:.0%}/trade @ {LEVERAGE}x")
+    print(f"ML LIVE TRADER | {mode} | strategy={STRATEGY_VERSION.upper()} | "
+          f"coins={SYMBOLS} | {POSITION_FRACTION:.0%}/trade @ {LEVERAGE}x")
 
     if not config.KRAKEN_API_KEY or not config.KRAKEN_API_SECRET:
         print("❌ Missing Kraken credentials - aborting.")
@@ -330,7 +362,8 @@ def main() -> None:
 
     for symbol, kp, df, sig in candidates[:open_slots]:
         current_price = float(df['Close'].iloc[-1])
-        conf_mult = confidence_size_multiplier(sig.prob_up, sig.dynamic_threshold)
+        conf_mult = (confidence_size_multiplier(sig.prob_up, sig.dynamic_threshold)
+                     if USE_CONFIDENCE_SIZING else 1.0)
         margin_usd = usable_margin * POSITION_FRACTION * conf_mult * sig.regime_size_multiplier
         volume = (margin_usd * LEVERAGE) / current_price
 
@@ -343,7 +376,10 @@ def main() -> None:
         now = df.index[-1]
         taker_cost = cost_model.estimated_total_cost(HORIZON, 'taker')
         taker_ev = expected_value(sig.prob_up, sig.avg_win, sig.avg_loss, taker_cost)
-        allow_market_fallback = taker_ev > 0 and taker_ev > EV_COST_MULTIPLIER * taker_cost
+        allow_market_fallback = (
+            taker_ev > 0 and taker_ev > EV_COST_MULTIPLIER * taker_cost
+            if EV_GATED_MARKET_FALLBACK else True
+        )
         try:
             fill_how = 'dry-run'
             entry_price = current_price
@@ -372,7 +408,7 @@ def main() -> None:
                 'margin_usd': round(margin_usd, 2),
                 'leverage': LEVERAGE,
                 'entry_fill': fill_how,
-                'model_version': 'v3_cost_aware_ev_btc_rs',
+                'model_version': STRATEGY_VERSION,
             }
             actions.append(f"OPEN {symbol} {direction.upper()} @ {entry_price:.4f} "
                            f"vol={filled_volume:.6f} ({fill_how}, p={sig.prob_up:.2f}, "

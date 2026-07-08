@@ -1,10 +1,9 @@
 name: ML Strategy LIVE Trading (real money)
 
 # ⚠️ THIS PLACES REAL ORDERS ON KRAKEN via ml_live_trade.py.
-# V3 strategy: cost-aware labels, h=72, thr=0.70, Fear&Greed features,
-# adaptive exit, F&G filter. BTC/RS/EV filters are available but off by default
-# because the latest ablation reduced expectancy.
-# To pause it: comment out the schedule below (like the old swing bot).
+# Default: V2 (more trades, higher compounding in backtests).
+# Switch to V3: set ML_LIVE_STRATEGY=v3 in env below.
+# To pause: comment out the schedule below.
 
 on:
   schedule:
@@ -15,6 +14,10 @@ on:
         description: 'Dry-run (true) = no real orders; false = REAL MONEY'
         required: false
         default: 'false'
+      strategy:
+        description: 'Strategy profile (v2 or v3)'
+        required: false
+        default: 'v2'
 
 # Never run two live trades at once (avoids double orders on overlap).
 concurrency:
@@ -57,37 +60,19 @@ jobs:
         KRAKEN_API_SECRET: ${{ secrets.KRAKEN_API_SECRET }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        ML_LIVE_STRATEGY: ${{ github.event.inputs.strategy || 'v2' }}
         ML_LIVE_SYMBOLS: 'XRP-USD,ADA-USD,SOL-USD,LINK-USD,DOGE-USD'
-        ML_LIVE_HORIZON: '72'
-        ML_LIVE_BUY_THR: '0.70'
-        ML_LIVE_EXIT_THR: '0.40'
-        ML_LIVE_FNG_FEATURES: 'true'
-        ML_LIVE_FNG_FILTER: 'true'
         ML_LIVE_LEVERAGE: '2'
-        # 5 coins x 20% = full usable margin when all signal at once.
         ML_LIVE_POSITION_FRACTION: '0.20'
         ML_LIVE_MAX_OPEN: '5'
         ML_LIVE_LONG_ONLY: 'true'
-        # Cost-aware net-profitable labels.
-        ML_LIVE_MAKER_ENTRY_FEE: '0.0023'
-        ML_LIVE_TAKER_ENTRY_FEE: '0.0040'
-        ML_LIVE_TAKER_EXIT_FEE: '0.0040'
-        ML_LIVE_MARGIN_OPEN_FEE: '0.0004'
-        ML_LIVE_ROLLOVER_FEE_4H: '0.0004'
-        ML_LIVE_SPREAD_BUFFER: '0.0005'
-        ML_LIVE_SLIPPAGE_BUFFER: '0.0010'
-        ML_LIVE_MINIMUM_EDGE: '0.0075'
-        # Implemented but disabled by default after ablation testing.
-        ML_LIVE_BTC_FEATURES: 'false'
-        ML_LIVE_BTC_REGIME_FILTER: 'false'
-        ML_LIVE_RELATIVE_STRENGTH_FILTER: 'false'
-        ML_LIVE_EXPECTED_VALUE_FILTER: 'false'
-        # Try cheap maker (post-only limit) entry first, market fallback after 90s.
+        ML_LIVE_FNG_FEATURES: 'true'
+        ML_LIVE_FNG_FILTER: 'true'
         ML_LIVE_MAKER_ENTRY: 'true'
         ML_LIVE_MAKER_WAIT_SEC: '90'
         ML_LIVE_DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
       run: |
-        echo "ML LIVE TRADER"
+        echo "ML LIVE TRADER (strategy=${ML_LIVE_STRATEGY})"
         echo "Date: $(date)"
         python ml_live_trade.py
 

@@ -329,7 +329,7 @@ def main() -> None:
     parser.add_argument('--long-only', action='store_true',
                         help="Ignore short signals (sets sell threshold to 0).")
     parser.add_argument('--v3', action='store_true',
-                        help="Enable the validated V3 profit-margin profile: cost-aware labels.")
+                        help="Use V3 profile (cost-aware labels). Default is V2-style labels.")
     parser.add_argument('--cost-aware-labels', action='store_true')
     parser.add_argument('--btc-features', action='store_true')
     parser.add_argument('--btc-regime-filter', action='store_true')

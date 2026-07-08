@@ -1,17 +1,16 @@
 """
-SHARED ML STRATEGY V3 (single source of truth for backtest + live)
+SHARED ML STRATEGY (single source of truth for backtest + live)
 
-Validated V3 profit-margin profile (ml_strategy_backtest.py --v3):
-- Cost-aware labels: model predicts net-profitable 72h trades after estimated
-  Kraken fees, margin costs, spread/slippage buffer, and minimum edge
-- Higher entry threshold 0.70
-- Fear & Greed features (+ expectancy vs price-only baseline)
-- 72-bar hold (~3 days) for higher per-trade edge
-- Adaptive exit: close early if model probability drops below 0.40 during hold
-- F&G entry filter: skip when index is 25-40 (that bucket loses money)
+Two saved profiles — switch with ML_LIVE_STRATEGY=v2 or v3 (live/paper)
+or ml_strategy_backtest.py --v3 for backtests.
 
-Validated V3 profile backtest (720d, 5 coins, conservative costs):
-  +15.48% expectancy/trade, PF 8.80, 23 trades.
+V2 (default live): more trades, higher total compounding in backtests.
+  h=72, thr=0.68, F&G features + filter, adaptive exit at 0.40.
+  Backtest (720d, 5 coins): +6.30% expectancy/trade, PF ~2.2, ~79 trades.
+
+V3 (opt-in): fewer trades, higher per-trade edge, cost-aware labels.
+  h=72, thr=0.70, cost-aware labels, EV-gated market entries, confidence sizing.
+  Backtest (720d, 5 coins): +15.39% expectancy/trade, PF ~12, ~24 trades.
 """
 
 from dataclasses import dataclass, field
@@ -83,6 +82,108 @@ class KrakenCostModel:
         )
         execution_cost = self.spread_buffer + self.slippage_buffer
         return fee_multiplier * fee_cost + execution_cost
+
+
+@dataclass(frozen=True)
+class StrategyProfile:
+    """Named preset for V2 vs V3 — used by live, paper, and backtest runners."""
+    version: str
+    horizon: int
+    buy_thr: float
+    exit_thr: float
+    use_cost_aware_labels: bool
+    use_fng_features: bool
+    use_fng_filter: bool
+    long_only: bool
+    margin_open_fee: float
+    rollover_fee_4h: float
+    minimum_edge: float
+    use_ev_exit: bool
+    ev_gated_market_fallback: bool
+    use_confidence_sizing: bool
+    use_btc_features: bool = False
+    use_btc_regime_filter: bool = False
+    use_relative_strength_filter: bool = False
+    use_expected_value_filter: bool = False
+    ev_cost_multiplier: float = 1.5
+
+
+V2_PROFILE = StrategyProfile(
+    version='v2',
+    horizon=72,
+    buy_thr=0.68,
+    exit_thr=0.40,
+    use_cost_aware_labels=False,
+    use_fng_features=True,
+    use_fng_filter=True,
+    long_only=True,
+    margin_open_fee=0.0002,
+    rollover_fee_4h=0.0002,
+    minimum_edge=0.0,
+    use_ev_exit=False,
+    ev_gated_market_fallback=False,
+    use_confidence_sizing=False,
+)
+
+V3_PROFILE = StrategyProfile(
+    version='v3',
+    horizon=72,
+    buy_thr=0.70,
+    exit_thr=0.40,
+    use_cost_aware_labels=True,
+    use_fng_features=True,
+    use_fng_filter=True,
+    long_only=True,
+    margin_open_fee=0.0004,
+    rollover_fee_4h=0.0004,
+    minimum_edge=0.0075,
+    use_ev_exit=True,
+    ev_gated_market_fallback=True,
+    use_confidence_sizing=True,
+)
+
+
+def get_strategy_profile(version: str = 'v2') -> StrategyProfile:
+    """Return V2 or V3 preset. Unknown values fall back to V2."""
+    key = (version or 'v2').strip().lower()
+    if key in ('v3', '3'):
+        return V3_PROFILE
+    return V2_PROFILE
+
+
+def build_cost_model(profile: StrategyProfile, **overrides) -> KrakenCostModel:
+    """Build KrakenCostModel from a profile, with optional field overrides."""
+    fields = dict(
+        margin_open_fee=profile.margin_open_fee,
+        margin_rollover_fee_4h=profile.rollover_fee_4h,
+        minimum_edge=profile.minimum_edge,
+    )
+    fields.update(overrides)
+    return KrakenCostModel(**fields)
+
+
+def create_ml_strategy(profile: StrategyProfile, cost_model: KrakenCostModel,
+                       **overrides) -> 'MLSwingStrategy':
+    """Instantiate MLSwingStrategy from a saved profile."""
+    params = dict(
+        horizon=profile.horizon,
+        buy_thr=profile.buy_thr,
+        sell_thr=0.0 if profile.long_only else 0.35,
+        exit_thr=profile.exit_thr,
+        use_fng_features=profile.use_fng_features,
+        use_fng_filter=profile.use_fng_filter,
+        long_only=profile.long_only,
+        cost_model=cost_model,
+        use_cost_aware_labels=profile.use_cost_aware_labels,
+        use_btc_features=profile.use_btc_features,
+        use_btc_regime_filter=profile.use_btc_regime_filter,
+        use_relative_strength_filter=profile.use_relative_strength_filter,
+        use_expected_value_filter=profile.use_expected_value_filter,
+        ev_cost_multiplier=profile.ev_cost_multiplier,
+        use_ev_exit=profile.use_ev_exit,
+    )
+    params.update(overrides)
+    return MLSwingStrategy(**params)
 
 
 def build_cost_aware_labels(
@@ -313,12 +414,13 @@ class MLSwingStrategy:
         use_fng_filter: bool = True,
         long_only: bool = True,
         cost_model: Optional[KrakenCostModel] = None,
-        use_cost_aware_labels: bool = True,
+        use_cost_aware_labels: bool = False,
         use_btc_features: bool = False,
         use_btc_regime_filter: bool = False,
         use_relative_strength_filter: bool = False,
         use_expected_value_filter: bool = False,
         ev_cost_multiplier: float = 1.5,
+        use_ev_exit: bool = True,
     ):
         self.horizon = horizon
         self.buy_thr = buy_thr
@@ -336,6 +438,7 @@ class MLSwingStrategy:
         self.use_relative_strength_filter = use_relative_strength_filter
         self.use_expected_value_filter = use_expected_value_filter
         self.ev_cost_multiplier = ev_cost_multiplier
+        self.use_ev_exit = use_ev_exit
 
     def _train_and_predict(self, data: pd.DataFrame, btc_data: Optional[pd.DataFrame] = None) -> tuple:
         """
@@ -439,4 +542,6 @@ class MLSwingStrategy:
         avg_win, avg_loss = estimate_payoff_stats(future_return, trainable)
         estimated_cost = self.cost_model.estimated_total_cost(self.horizon, 'maker')
         ev = expected_value(prob_up, avg_win, avg_loss, estimated_cost)
-        return (prob_up < self.exit_thr or ev < 0), prob_up
+        if self.use_ev_exit:
+            return (prob_up < self.exit_thr or ev < 0), prob_up
+        return prob_up < self.exit_thr, prob_up
