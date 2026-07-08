@@ -47,6 +47,8 @@ def backtest_symbol(
     atr_stop_mult: float,
     atr_period: int,
     starting_equity: float = 1000.0,
+    margin_open_fee: float = 0.0002,
+    rollover_fee: float = 0.0002,
 ) -> dict:
     """Run the walk-forward backtest for one coin and return its stats."""
     feats = build_features(data)
@@ -140,7 +142,18 @@ def backtest_symbol(
             gross_pct = (exit_price - entry_price) / entry_price * 100 * leverage
         else:
             gross_pct = (entry_price - exit_price) / entry_price * 100 * leverage
-        net_pct = gross_pct - fee_cost_pct
+
+        # Kraken margin costs the backtest previously ignored: an opening fee
+        # plus a rollover fee every 4 hours the position stays open. Both are
+        # charged on the full position value, so they scale with leverage.
+        # (Assumes 1h bars: bars_held == hours held.)
+        bars_held = exit_idx - i
+        margin_cost_pct = 0.0
+        if leverage > 1:
+            n_rollovers = bars_held // 4
+            margin_cost_pct = (margin_open_fee + rollover_fee * n_rollovers) * 100 * leverage
+
+        net_pct = gross_pct - fee_cost_pct - margin_cost_pct
 
         equity *= (1 + net_pct / 100)
         equity_curve.append(equity)
@@ -154,8 +167,9 @@ def backtest_symbol(
             'entry_price': entry_price,
             'exit_price': exit_price,
             'net_pnl_pct': net_pct,
+            'margin_cost_pct': round(margin_cost_pct, 4),
             'exit_reason': exit_reason,
-            'bars_held': exit_idx - i,
+            'bars_held': bars_held,
         })
 
         i = exit_idx + 1  # non-overlapping: resume after the trade closes
@@ -214,13 +228,23 @@ def main() -> None:
     parser.add_argument('--retrain-every', type=int, default=720, help="Retrain cadence in bars.")
     parser.add_argument('--atr-stop-mult', type=float, default=0.0, help="ATR stop distance (0 = off).")
     parser.add_argument('--atr-period', type=int, default=14)
+    parser.add_argument('--margin-open-fee', type=float, default=0.0002,
+                        help="Kraken margin opening fee on position value (0.0002 = 0.02%%).")
+    parser.add_argument('--rollover-fee', type=float, default=0.0002,
+                        help="Kraken rollover fee per 4h held, on position value (0.0002 = 0.02%%).")
+    parser.add_argument('--long-only', action='store_true',
+                        help="Ignore short signals (sets sell threshold to 0).")
     parser.add_argument('--out', default='ml_strategy_trades.csv')
     args = parser.parse_args()
+
+    if args.long_only:
+        args.sell_thr = 0.0
 
     symbols = [s.strip() for s in args.symbols.split(',') if s.strip()]
 
     print(f"ML strategy backtest | model={args.model} | horizon={args.horizon}b | "
-          f"lev={args.leverage}x | maker fee={args.fee * 100:.2f}%/side | "
+          f"lev={args.leverage}x | fee={args.fee * 100:.2f}%/side | "
+          f"margin open={args.margin_open_fee * 100:.2f}% + rollover={args.rollover_fee * 100:.2f}%/4h | "
           f"buy>{args.buy_thr} sell<{args.sell_thr} | atr_stop={args.atr_stop_mult or 'off'}")
     print("Running walk-forward (retrain on past only)...\n")
 
@@ -235,6 +259,7 @@ def main() -> None:
             symbol, data, args.horizon, args.buy_thr, args.sell_thr, args.fee,
             args.leverage, args.model, args.train_min, args.retrain_every,
             args.atr_stop_mult, args.atr_period,
+            margin_open_fee=args.margin_open_fee, rollover_fee=args.rollover_fee,
         )
         results.append(r)
         all_trades.extend(r.get('trades', []))

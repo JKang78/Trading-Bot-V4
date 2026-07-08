@@ -55,10 +55,18 @@ jobs:
         KRAKEN_API_SECRET: ${{ secrets.KRAKEN_API_SECRET }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        ML_LIVE_SYMBOLS: 'XRP-USD,ADA-USD,SOL-USD'
+        # LINK + DOGE added after passing the same walk-forward validation
+        # (positive expectancy in both early and holdout periods, honest fees).
+        ML_LIVE_SYMBOLS: 'XRP-USD,ADA-USD,SOL-USD,LINK-USD,DOGE-USD'
         ML_LIVE_LEVERAGE: '2'
+        # 5 coins x 20% = full usable margin when all signal at once.
         ML_LIVE_POSITION_FRACTION: '0.20'
-        ML_LIVE_MAX_OPEN: '3'
+        ML_LIVE_MAX_OPEN: '5'
+        # Longs backtested at ~+3.0%/trade vs ~+0.9% for shorts -> long-only.
+        ML_LIVE_LONG_ONLY: 'true'
+        # Try cheap maker (post-only limit) entry first, market fallback after 90s.
+        ML_LIVE_MAKER_ENTRY: 'true'
+        ML_LIVE_MAKER_WAIT_SEC: '90'
         ML_LIVE_DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
       run: |
         echo "ML LIVE TRADER"

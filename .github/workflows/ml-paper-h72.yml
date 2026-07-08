@@ -1,0 +1,75 @@
+name: ML Paper Trading - h72 candidate
+
+# Forward-tests the HIGHER-EXPECTANCY candidate config found by
+# tune_expectancy.py (hold 72h, enter at P(up)>0.68, long-only) on live data
+# with NO real money. If its paper results hold up for a few weeks, we can
+# promote it to ml-live-trade.yml by changing two env vars there.
+
+on:
+  schedule:
+    - cron: '0 * * * *'   # hourly, same cadence as the main paper trader
+  workflow_dispatch:
+
+jobs:
+  paper-trade-h72:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        pip install --upgrade pip
+        pip install -r requirements.txt
+
+    # Separate state file so it never mixes with the main paper trader.
+    - name: Load paper state cache
+      continue-on-error: true
+      uses: actions/cache@v4
+      with:
+        path: ml_paper_state_h72.json
+        key: ml-paper-state-h72-${{ github.run_number }}
+        restore-keys: |
+          ml-paper-state-h72-
+
+    - name: Run ML paper trader (h72 candidate)
+      env:
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        ML_PAPER_STATE_FILE: 'ml_paper_state_h72.json'
+        ML_PAPER_SYMBOLS: 'XRP-USD,ADA-USD,SOL-USD'
+        ML_PAPER_HORIZON: '72'
+        ML_PAPER_BUY_THR: '0.68'
+        # Long-only: a sell threshold of 0 means "never short".
+        ML_PAPER_SELL_THR: '0'
+        ML_PAPER_LEVERAGE: '2'
+        # Maker entry + taker exit averaged per side, matching the live setup.
+        ML_PAPER_FEE: '0.0021'
+      run: |
+        echo "ML PAPER TRADING - h72/0.68 candidate (no real money)"
+        echo "Date: $(date)"
+        python ml_paper_trade.py
+
+    - name: Save paper state cache
+      if: always()
+      continue-on-error: true
+      uses: actions/cache@v4
+      with:
+        path: ml_paper_state_h72.json
+        key: ml-paper-state-h72-${{ github.run_number }}
+
+    - name: Upload paper state artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ml-paper-state-h72-${{ github.run_number }}
+        path: ml_paper_state_h72.json
+        retention-days: 14

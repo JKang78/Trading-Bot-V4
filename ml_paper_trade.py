@@ -160,7 +160,10 @@ def main() -> None:
     wins = [t for t in state['closed'] if t['pnl_pct'] > 0]
     win_rate = (len(wins) / n_closed * 100) if n_closed else 0.0
 
-    header = "🧪 <b>ML PAPER TRADING</b> (no real money)"
+    # Include the config in the header so parallel paper traders (e.g. the
+    # h72 candidate) are distinguishable in Telegram.
+    header = (f"🧪 <b>ML PAPER TRADING</b> (no real money) "
+              f"[h={HORIZON}, thr={BUY_THR:g}{'' if SELL_THR > 0 else ', long-only'}]")
     body = (
         f"\nEquity: ${state['equity']:.2f}  ({total_return:+.1f}%)"
         f"\nOpen positions: {len(state['open'])}"

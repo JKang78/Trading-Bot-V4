@@ -141,6 +141,10 @@ class Config:
         TradingPair('ADA-USD', 'ADAUSD', 10.0, 0.25),
         TradingPair('SOL-USD', 'SOLUSD', 0.01, 0.20),
         TradingPair('XRP-USD', 'XRPUSD', 10.0, 0.25),
+        # Added for the ML strategy (validated walk-forward, long-only).
+        # Kraken minimums checked via the public AssetPairs API.
+        TradingPair('LINK-USD', 'LINKUSD', 0.55, 0.20),
+        TradingPair('DOGE-USD', 'XDGUSD', 50.0, 0.20),
     ]
     
     MAX_CORRELATION = float(os.getenv('MAX_CORRELATION', '0.7'))
@@ -314,6 +318,26 @@ class KrakenClient:
         """Return resting (still unfilled) orders, keyed by order id."""
         result = self._request('/0/private/OpenOrders', private=True)
         return result.get('open', {}) if result else {}
+
+    def get_bid_ask(self, pair: str) -> Tuple[Optional[float], Optional[float]]:
+        """Current best bid/ask from the public ticker (no auth needed)."""
+        result = self._request('/0/public/Ticker', data={'pair': pair})
+        for _, info in result.items():
+            return float(info['b'][0]), float(info['a'][0])
+        return None, None
+
+    def cancel_order(self, txid: str) -> dict:
+        """Cancel one resting order by its transaction id."""
+        return self._request('/0/private/CancelOrder', data={'txid': txid}, private=True)
+
+    def query_order(self, txid: str) -> dict:
+        """
+        Look up one order's current state. The result includes:
+        - 'status': 'open', 'closed' (= fully filled), 'canceled', 'expired'
+        - 'vol_exec': how much volume actually filled so far
+        """
+        result = self._request('/0/private/QueryOrders', data={'txid': txid}, private=True)
+        return result.get(txid, {})
 
     def cancel_all_orders(self) -> dict:
         """

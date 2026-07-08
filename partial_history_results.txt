@@ -1,0 +1,19 @@
+BASELINE (live config: long-only, h=48, thr=0.65, 2x, fee=0.21%/side, model=logistic)
+
+  XRP: 76038 bars (2017-11-03 .. 2026-07-07)
+    -> trades=  45  exp/trade= +2.18%  win=60.0%  total=   -84.9%  (buy&hold +61%)  maxDD=98.7%
+  ADA: 76037 bars (2017-11-03 .. 2026-07-07)
+    -> trades=  32  exp/trade= +4.11%  win=53.1%  total=   +55.7%  (buy&hold -31%)  maxDD=79.2%
+
+── Expectancy by calendar year (all coins pooled) ──
+  year   trades  exp/trade   win%     PF
+  2018       22     +1.05%  40.9%   1.13
+  2019        8     -4.70%  50.0%   0.32
+  2020       11    -15.67%  36.4%   0.28
+  2021       20    +10.24%  70.0%   2.36
+  2022        3     +6.17%  66.7%   4.21
+  2023        3    +10.50%  66.7%  23.44
+  2024        4    +18.30% 100.0% inf
+  2025        5     +9.59%  80.0%   3.21
+  2026        1    +40.39% 100.0% inf
+  ALL        77     +2.98%  57.1%   1.35

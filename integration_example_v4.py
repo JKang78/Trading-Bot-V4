@@ -1,15 +1,16 @@
 """
-EJEMPLO DE INTEGRACIÓN V4
-Muestra cómo integrar todos los módulos nuevos en el bot V3 existente
+V4 INTEGRATION EXAMPLE
+Shows how to integrate all new modules into the existing V3 bot
 """
 
 import os
+from datetime import datetime
 from typing import Dict, Optional, Tuple
 import pandas as pd
 
-# Importar módulos V4
+# Import V4 modules
 from sentiment_analyzer import (
-    SentimentAnalyzer, 
+    SentimentAnalyzer,
     should_trade_based_on_sentiment
 )
 from onchain_metrics import (
@@ -26,50 +27,50 @@ from rl_position_sizing import (
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
-#                   MODIFICACIONES AL BOT V3
+#                   MODIFICATIONS TO THE V3 BOT
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TradingBotV4:
     """
-    Extensión del bot V3 con funcionalidades V4.
-    
-    Esta clase muestra cómo integrar:
+    V3 bot extension with V4 functionality.
+
+    This class shows how to integrate:
     - Sentiment analysis
     - On-chain metrics
     - Ensemble strategies
     - RL position sizing
     """
-    
+
     def __init__(self, config):
         """
-        Inicializar bot V4 con nuevos componentes.
+        Initialize V4 bot with new components.
         """
-        # Componentes V3 existentes
+        # Existing V3 components
         self.config = config
         # ... (kraken, telegram, position_mgr, etc.)
-        
+
         # ══════════════════════════════════════════════════════
-        #         NUEVOS COMPONENTES V4
+        #         NEW V4 COMPONENTS
         # ══════════════════════════════════════════════════════
-        
+
         # 1. Sentiment Analyzer
         if getattr(config, 'USE_SENTIMENT_ANALYSIS', False):
             self.sentiment_analyzer = SentimentAnalyzer(
                 api_key=config.CRYPTOCOMPARE_API_KEY
             )
-            print("   ✓ Sentiment Analyzer activado")
+            print("   ✓ Sentiment Analyzer enabled")
         else:
             self.sentiment_analyzer = None
-        
+
         # 2. On-Chain Analyzer
         if getattr(config, 'USE_ONCHAIN_ANALYSIS', False):
             self.onchain_analyzer = OnChainAnalyzer(
                 cryptocompare_api_key=config.CRYPTOCOMPARE_API_KEY
             )
-            print("   ✓ On-Chain Analyzer activado")
+            print("   ✓ On-Chain Analyzer enabled")
         else:
             self.onchain_analyzer = None
-        
+
         # 3. Ensemble System
         if getattr(config, 'USE_ENSEMBLE_SYSTEM', False):
             weights = {
@@ -79,10 +80,10 @@ class TradingBotV4:
                 'trend_following': getattr(config, 'WEIGHT_TREND_FOLLOWING', 0.20)
             }
             self.ensemble_system = EnsembleSystem(weights=weights)
-            print("   ✓ Ensemble System activado")
+            print("   ✓ Ensemble System enabled")
         else:
             self.ensemble_system = None
-        
+
         # 4. RL Position Sizer
         if getattr(config, 'USE_RL_POSITION_SIZING', False):
             self.rl_sizer = RLPositionSizer(
@@ -92,36 +93,36 @@ class TradingBotV4:
                 state_file=getattr(config, 'RL_STATE_FILE', 'rl_state.json')
             )
             self.rl_calculator = PositionSizeCalculator(self.rl_sizer)
-            print("   ✓ RL Position Sizing activado")
+            print("   ✓ RL Position Sizing enabled")
         else:
             self.rl_sizer = None
             self.rl_calculator = None
-    
+
     # ══════════════════════════════════════════════════════
-    #      MÉTODO PRINCIPAL MODIFICADO
+    #      MODIFIED MAIN METHOD
     # ══════════════════════════════════════════════════════
-    
-    def analyze_trading_opportunity(self, 
+
+    def analyze_trading_opportunity(self,
                                    pair,
                                    data: pd.DataFrame,
                                    swing_signal: Tuple) -> Dict:
         """
-        Analiza oportunidad de trading con TODAS las capas V4.
-        
+        Analyze a trading opportunity with ALL V4 layers.
+
         Args:
             pair: TradingPair object
-            data: DataFrame con OHLCV
-            swing_signal: (signal, price, confidence) del swing detector
-        
+            data: DataFrame with OHLCV data
+            swing_signal: (signal, price, confidence) from the swing detector
+
         Returns:
-            Dict con decisión y metadata
+            Dict with decision and metadata
         """
         symbol = pair.yf_symbol
         signal, signal_price, swing_confidence = swing_signal
-        
-        print(f"\n🔍 Análisis Multi-Layer: {symbol}")
+
+        print(f"\n🔍 Multi-Layer Analysis: {symbol}")
         print(f"   Swing Signal: {signal} (conf: {swing_confidence:.2f})")
-        
+
         result = {
             'can_trade': False,
             'final_signal': None,
@@ -130,79 +131,79 @@ class TradingBotV4:
             'capital': 0.0,
             'leverage': self.config.LEVERAGE
         }
-        
+
         # ══════════════════════════════════════════════════════
         #       LAYER 1: SENTIMENT ANALYSIS
         # ══════════════════════════════════════════════════════
-        
+
         if self.sentiment_analyzer:
             sentiment = self.sentiment_analyzer.get_sentiment(symbol)
-            
+
             can_trade_sentiment = should_trade_based_on_sentiment(
                 sentiment,
                 signal,
                 min_confidence=getattr(self.config, 'MIN_SENTIMENT_CONFIDENCE', 0.5)
             )
-            
+
             if not can_trade_sentiment:
                 result['reasons'].append(
-                    f"❌ Sentiment conflictivo: {sentiment.overall_score:.2f}"
+                    f"❌ Sentiment conflict: {sentiment.overall_score:.2f}"
                 )
                 return result
-            
+
             result['reasons'].append(
                 f"✓ Sentiment: {sentiment.overall_score:.2f} ({sentiment.signal_type if hasattr(sentiment, 'signal_type') else 'N/A'})"
             )
-        
+
         # ══════════════════════════════════════════════════════
         #       LAYER 2: ON-CHAIN METRICS
         # ══════════════════════════════════════════════════════
-        
+
         if self.onchain_analyzer:
             onchain = self.onchain_analyzer.get_onchain_signal(symbol)
-            
+
             can_trade_onchain = should_trade_based_on_onchain(
                 onchain,
                 signal,
                 min_strength=getattr(self.config, 'MIN_ONCHAIN_STRENGTH', 0.5)
             )
-            
+
             if not can_trade_onchain:
                 result['reasons'].append(
-                    f"❌ On-Chain conflictivo: {onchain.signal_type}"
+                    f"❌ On-Chain conflict: {onchain.signal_type}"
                 )
                 return result
-            
+
             result['reasons'].append(
                 f"✓ On-Chain: {onchain.signal_type} (strength: {onchain.strength:.2f})"
             )
-        
+
         # ══════════════════════════════════════════════════════
         #       LAYER 3: ENSEMBLE STRATEGIES
         # ══════════════════════════════════════════════════════
-        
+
         if self.ensemble_system:
             ensemble_decision = self.ensemble_system.get_ensemble_decision(
                 data, swing_signal
             )
-            
+
             self.ensemble_system.print_decision_summary(ensemble_decision)
-            
-            # Verificar consenso y confianza
+
+            # Check consensus and confidence
             min_consensus = getattr(self.config, 'MIN_ENSEMBLE_CONSENSUS', 0.6)
             min_confidence = getattr(self.config, 'MIN_ENSEMBLE_CONFIDENCE', 0.6)
-            
+
             if (ensemble_decision.final_signal != signal or
                 ensemble_decision.consensus_level < min_consensus or
                 ensemble_decision.confidence < min_confidence):
-                
+
                 result['reasons'].append(
                     f"❌ Ensemble: {ensemble_decision.final_signal} "
                     f"(consensus: {ensemble_decision.consensus_level:.2f}, "
                     f"conf: {ensemble_decision.confidence:.2f})"
                 )
                 return result
-            
+
             result['reasons'].append(
                 f"✓ Ensemble: {ensemble_decision.final_signal} "
                 f"(consensus: {ensemble_decision.consensus_level:.2%})"
@@ -210,13 +211,13 @@ class TradingBotV4:
             result['confidence'] = ensemble_decision.confidence
         else:
             result['confidence'] = swing_confidence
-        
+
         # ══════════════════════════════════════════════════════
         #       LAYER 4: RL POSITION SIZING
         # ══════════════════════════════════════════════════════
-        
+
         if self.rl_calculator:
-            # Obtener capital y leverage óptimos
+            # Get optimal capital and leverage
             optimal_capital, optimal_leverage = self.rl_calculator.get_optimal_size(
                 data=data,
                 signal_confidence=result['confidence'],
@@ -224,74 +225,74 @@ class TradingBotV4:
                 base_leverage=self.config.LEVERAGE,
                 open_positions=len(self.positions),
                 recent_trades=self.get_recent_trades(),
-                training=True  # Modo entrenamiento
+                training=True  # Training mode
             )
-            
+
             result['capital'] = optimal_capital
             result['leverage'] = optimal_leverage
             result['reasons'].append(
                 f"✓ RL Sizing: ${optimal_capital:.2f} @ {optimal_leverage}x"
             )
         else:
-            # Usar sizing tradicional
+            # Use traditional sizing
             allocation = 1.0 / self.config.MAX_POSITIONS
             result['capital'] = self.get_available_capital() * allocation
             result['leverage'] = self.config.LEVERAGE
-        
+
         # ══════════════════════════════════════════════════════
-        #       DECISIÓN FINAL
+        #       FINAL DECISION
         # ══════════════════════════════════════════════════════
-        
+
         result['can_trade'] = True
         result['final_signal'] = signal
-        
-        print(f"\n✅ DECISIÓN: {signal}")
-        print(f"   Confianza: {result['confidence']:.2%}")
+
+        print(f"\n✅ DECISION: {signal}")
+        print(f"   Confidence: {result['confidence']:.2%}")
         print(f"   Capital: ${result['capital']:.2f}")
         print(f"   Leverage: {result['leverage']}x")
-        print(f"   Razones:")
+        print(f"   Reasons:")
         for reason in result['reasons']:
             print(f"   {reason}")
-        
+
         return result
-    
+
     # ══════════════════════════════════════════════════════
-    #      MODIFICAR MÉTODO DE APERTURA DE POSICIÓN
+    #      MODIFY POSITION OPENING METHOD
     # ══════════════════════════════════════════════════════
-    
+
     def open_position_v4(self, pair, analysis_result: Dict, current_price: float):
         """
-        Abre posición usando resultados del análisis V4.
-        
+        Open a position using V4 analysis results.
+
         Args:
             pair: TradingPair object
-            analysis_result: Dict del analyze_trading_opportunity
-            current_price: Precio actual
+            analysis_result: Dict from analyze_trading_opportunity
+            current_price: Current price
         """
         signal = analysis_result['final_signal']
         capital = analysis_result['capital']
         leverage = analysis_result['leverage']
         confidence = analysis_result['confidence']
-        
-        # Calcular volumen basado en capital RL
+
+        # Calculate volume based on RL capital
         volume = (capital * leverage) / current_price
-        
-        # Verificar volumen mínimo
+
+        # Check minimum volume
         if volume < pair.min_volume:
-            print(f"   ⚠️ Volumen {volume:.8f} < mínimo {pair.min_volume}")
+            print(f"   ⚠️ Volume {volume:.8f} < minimum {pair.min_volume}")
             return
-        
+
         try:
-            print(f"\n🟢 Abriendo {signal} en {pair.yf_symbol}")
-            print(f"   Precio: ${current_price:.4f}")
-            print(f"   Capital RL: ${capital:.2f}")
-            print(f"   Leverage RL: {leverage}x")
-            print(f"   Volumen: {volume:.8f}")
-            print(f"   Confianza Ensemble: {confidence:.2%}")
-            
+            print(f"\n🟢 Opening {signal} on {pair.yf_symbol}")
+            print(f"   Price: ${current_price:.4f}")
+            print(f"   RL Capital: ${capital:.2f}")
+            print(f"   RL Leverage: {leverage}x")
+            print(f"   Volume: {volume:.8f}")
+            print(f"   Ensemble Confidence: {confidence:.2%}")
+
             if not self.config.DRY_RUN:
                 order_type = 'buy' if signal == 'BUY' else 'sell'
-                
+
                 result = self.kraken.place_order(
                     pair=pair.kraken_pair,
                     order_type=order_type,
@@ -299,10 +300,10 @@ class TradingBotV4:
                     leverage=leverage,
                     reduce_only=False
                 )
-                
-                print(f"   ✓ Ejecutada: {result}")
-                
-                # Guardar para actualización RL posterior
+
+                print(f"   ✓ Executed: {result}")
+
+                # Save for later RL update
                 if self.rl_calculator:
                     self._save_trade_for_rl_update({
                         'symbol': pair.yf_symbol,
@@ -313,182 +314,182 @@ class TradingBotV4:
                         'confidence': confidence
                     })
             else:
-                print(f"   🧪 [SIMULACIÓN]")
-            
-            # Notificar con detalles V4
-            self._send_v4_notification(pair, signal, current_price, 
+                print(f"   🧪 [SIMULATION]")
+
+            # Notify with V4 details
+            self._send_v4_notification(pair, signal, current_price,
                                       volume, leverage, confidence,
                                       analysis_result['reasons'])
-            
+
         except Exception as e:
             print(f"   ❌ Error: {e}")
-    
+
     # ══════════════════════════════════════════════════════
-    #      ACTUALIZACIÓN RL AL CERRAR POSICIÓN
+    #      RL UPDATE ON POSITION CLOSE
     # ══════════════════════════════════════════════════════
-    
+
     def close_position_v4(self, pair, pos_data: Dict, exit_price: float, reason: str):
         """
-        Cierra posición y actualiza RL agent.
+        Close a position and update the RL agent.
         """
-        # Cerrar posición normalmente (código V3)
-        # ... 
-        
-        # Calcular PnL
+        # Close position normally (V3 code)
+        # ...
+
+        # Calculate PnL
         entry_price = float(pos_data.get('cost', 0)) / float(pos_data.get('vol', 1))
         leverage = float(pos_data.get('leverage', 1))
         pos_type = pos_data.get('type', 'long')
-        
+
         if pos_type == 'long':
             pnl_pct = ((exit_price - entry_price) / entry_price) * 100 * leverage
         else:
             pnl_pct = ((entry_price - exit_price) / entry_price) * 100 * leverage
-        
+
         # ══════════════════════════════════════════════════════
-        #       ACTUALIZAR RL AGENT
+        #       UPDATE RL AGENT
         # ══════════════════════════════════════════════════════
-        
+
         if self.rl_sizer:
             trade_result = {
                 'closed': True,
                 'pnl_pct': pnl_pct,
                 'exit_reason': reason
             }
-            
+
             reward = self.rl_sizer.calculate_reward(trade_result)
-            
-            # Obtener el historial de esta posición
+
+            # Get history for this position
             trade_history = self._get_trade_history(pair.yf_symbol)
-            
+
             if trade_history:
                 state = trade_history['state']
                 action_idx = trade_history['action_idx']
-                
-                # Calcular next_state (estado actual)
+
+                # Calculate next_state (current state)
                 current_data = self.get_market_data(pair.yf_symbol)
                 next_state = self.rl_calculator.calculate_market_state(
                     data=current_data,
-                    signal_confidence=0.0,  # No hay señal ahora
+                    signal_confidence=0.0,  # No signal now
                     open_positions=len(self.positions),
                     recent_trades=self.trades
                 )
-                
-                # Actualizar Q-values
+
+                # Update Q-values
                 self.rl_sizer.update_q_value(state, action_idx, reward, next_state)
-                
+
                 print(f"   🤖 RL Updated: reward={reward:.3f}")
-            
-            # Guardar estado periódicamente
-            if len(self.trades) % 5 == 0:  # Cada 5 trades
+
+            # Save state periodically
+            if len(self.trades) % 5 == 0:  # Every 5 trades
                 self.rl_sizer.save_state()
-    
+
     # ══════════════════════════════════════════════════════
     #      HELPERS
     # ══════════════════════════════════════════════════════
-    
-    def _send_v4_notification(self, pair, signal, price, volume, 
-                             leverage, confidence, reasons):
-        """Notificación Telegram con detalles V4."""
-        
-        reasons_text = "\n".join([f"• {r}" for r in reasons])
-        
-        msg = f"""
-🟢 <b>NUEVA POSICIÓN V4</b>
 
-<b>Par:</b> {pair.yf_symbol} ({pair.kraken_pair})
-<b>Señal:</b> {signal}
-<b>Precio:</b> ${price:.4f}
-<b>Volumen:</b> {volume:.8f}
+    def _send_v4_notification(self, pair, signal, price, volume,
+                             leverage, confidence, reasons):
+        """Telegram notification with V4 details."""
+
+        reasons_text = "\n".join([f"• {r}" for r in reasons])
+
+        msg = f"""
+🟢 <b>NEW V4 POSITION</b>
+
+<b>Pair:</b> {pair.yf_symbol} ({pair.kraken_pair})
+<b>Signal:</b> {signal}
+<b>Price:</b> ${price:.4f}
+<b>Volume:</b> {volume:.8f}
 
 <b>🤖 AI Decision:</b>
-<b>Confianza:</b> {confidence:.1%}
-<b>Capital RL:</b> ${volume * price / leverage:.2f}
-<b>Leverage RL:</b> {leverage}x
+<b>Confidence:</b> {confidence:.1%}
+<b>RL Capital:</b> ${volume * price / leverage:.2f}
+<b>RL Leverage:</b> {leverage}x
 
-<b>📊 Análisis:</b>
+<b>📊 Analysis:</b>
 {reasons_text}
 
-<b>Fecha:</b> {datetime.now().strftime('%Y-%m-%d %H:%M')}
+<b>Date:</b> {datetime.now().strftime('%Y-%m-%d %H:%M')}
 """
-        
+
         if self.config.DRY_RUN:
-            msg = "🧪 <b>SIMULACIÓN</b>\n" + msg
-        
+            msg = "🧪 <b>SIMULATION</b>\n" + msg
+
         self.telegram.send(msg)
-    
+
     def _save_trade_for_rl_update(self, trade_data: Dict):
-        """Guarda datos del trade para actualización RL posterior."""
-        # Implementar según tu sistema de persistencia
+        """Save trade data for later RL update."""
+        # Implement according to your persistence system
         pass
-    
+
     def _get_trade_history(self, symbol: str) -> Optional[Dict]:
-        """Recupera historial de trade para RL update."""
-        # Implementar según tu sistema de persistencia
+        """Retrieve trade history for RL update."""
+        # Implement according to your persistence system
         pass
-    
+
     def get_available_capital(self) -> float:
-        """Obtiene capital disponible."""
-        # Implementar según tu lógica
+        """Get available capital."""
+        # Implement according to your logic
         return 1000.0
-    
+
     def get_recent_trades(self) -> list:
-        """Obtiene lista de trades recientes."""
-        # Implementar según tu lógica
+        """Get list of recent trades."""
+        # Implement according to your logic
         return []
-    
+
     def get_market_data(self, symbol: str) -> pd.DataFrame:
-        """Obtiene datos de mercado."""
-        # Implementar según tu lógica
+        """Get market data."""
+        # Implement according to your logic
         pass
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#                   EJEMPLO DE USO
+#                   USAGE EXAMPLE
 # ═══════════════════════════════════════════════════════════════════════════
 
 def example_usage():
     """
-    Ejemplo de cómo usar el bot V4.
+    Example of how to use the V4 bot.
     """
-    
-    # Configuración
+
+    # Configuration
     class ConfigV4:
         # Existing V3 config
         KRAKEN_API_KEY = os.getenv('KRAKEN_API_KEY')
         KRAKEN_API_SECRET = os.getenv('KRAKEN_API_SECRET')
         CRYPTOCOMPARE_API_KEY = os.getenv('CRYPTOCOMPARE_API_KEY')
-        
+
         # V4 features
         USE_SENTIMENT_ANALYSIS = True
         USE_ONCHAIN_ANALYSIS = True
         USE_ENSEMBLE_SYSTEM = True
         USE_RL_POSITION_SIZING = True
-        
+
         MIN_SENTIMENT_CONFIDENCE = 0.5
         MIN_ONCHAIN_STRENGTH = 0.5
         MIN_ENSEMBLE_CONSENSUS = 0.6
         MIN_ENSEMBLE_CONFIDENCE = 0.6
-        
+
         WEIGHT_SWING = 0.30
         WEIGHT_MOMENTUM = 0.25
         WEIGHT_MEAN_REVERSION = 0.25
         WEIGHT_TREND_FOLLOWING = 0.20
-        
+
         RL_LEARNING_RATE = 0.1
         RL_EPSILON = 0.1
-        
+
         MAX_POSITIONS = 3
         LEVERAGE = 3
         DRY_RUN = True
-    
-    # Inicializar bot V4
+
+    # Initialize V4 bot
     bot = TradingBotV4(ConfigV4())
-    
-    # En tu loop principal, reemplazar:
+
+    # In your main loop, replace:
     # if swing_signal:
     #     open_position(...)
-    
-    # Por:
+    #
+    # With:
     # if swing_signal:
     #     analysis = bot.analyze_trading_opportunity(pair, data, swing_signal)
     #     if analysis['can_trade']:
@@ -496,5 +497,5 @@ def example_usage():
 
 
 if __name__ == "__main__":
-    print("Este es un archivo de ejemplo de integración.")
-    print("Copia las funciones relevantes a tu bot principal.")
+    print("This is an integration example file.")
+    print("Copy the relevant functions into your main bot.")

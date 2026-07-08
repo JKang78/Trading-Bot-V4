@@ -1,93 +1,93 @@
 # 🚀 Kraken Trading Bot V4 - Advanced AI System
 
-Bot de trading de última generación con **Machine Learning**, **On-Chain Analysis**, **Sentiment Analysis**, **Multi-Strategy Ensemble** y **Reinforcement Learning**.
+Next-generation trading bot with **Machine Learning**, **On-Chain Analysis**, **Sentiment Analysis**, **Multi-Strategy Ensemble**, and **Reinforcement Learning**.
 
-## 🆕 Novedades en V4
+## 🆕 What's New in V4
 
-### 🎯 Nuevas Funcionalidades Avanzadas
+### 🎯 New Advanced Features
 
 #### 1. **📊 Sentiment Analysis** (CryptoCompare API)
-- Análisis de noticias en tiempo real
-- Métricas de redes sociales (Twitter, Reddit)
-- Score de sentiment (-1 a +1)
-- Filtrado de señales basado en sentiment del mercado
+- Real-time news analysis
+- Social media metrics (Twitter, Reddit)
+- Sentiment score (-1 to +1)
+- Signal filtering based on market sentiment
 
 #### 2. **🔗 On-Chain Metrics**
 - Exchange flows (deposits/withdrawals)
 - Active addresses trend
 - Transaction volume analysis
 - Whale activity detection
-- Señales blockchain específicas de crypto
+- Crypto-specific blockchain signals
 
 #### 3. **🤝 Multi-Strategy Ensemble**
-- **4 estrategias** ejecutándose en paralelo:
-  - Swing Trading (detección de pivots)
+- **4 strategies** running in parallel:
+  - Swing Trading (pivot detection)
   - Momentum Strategy (RSI + ROC)
   - Mean Reversion (Bollinger Bands)
   - Trend Following (MA crossovers)
-- Sistema de **votación ponderada**
-- Nivel de **consenso** entre estrategias
-- Decisión final más robusta
+- **Weighted voting** system
+- **Consensus** level across strategies
+- More robust final decision
 
 #### 4. **🤖 Reinforcement Learning Position Sizing**
-- Tamaño de posición **dinámico** basado en RL
-- Aprende de trades anteriores
-- Ajusta allocation y leverage según condiciones
-- Q-Learning con estados discretizados
-- Persiste conocimiento entre ejecuciones
+- **Dynamic** position sizing based on RL
+- Learns from previous trades
+- Adjusts allocation and leverage based on conditions
+- Q-Learning with discretized states
+- Persists knowledge between runs
 
 ---
 
-## 📋 Requisitos
+## 📋 Requirements
 
-### APIs Necesarias
+### Required APIs
 
 1. **Kraken API**
-   - Account con margin trading
-   - API key + secret con permisos de trading
+   - Account with margin trading
+   - API key + secret with trading permissions
 
-2. **CryptoCompare API** (NUEVO)
-   - Cuenta gratuita en [CryptoCompare](https://www.cryptocompare.com/)
-   - API key para sentiment y on-chain data
+2. **CryptoCompare API** (NEW)
+   - Free account at [CryptoCompare](https://www.cryptocompare.com/)
+   - API key for sentiment and on-chain data
    - Free tier: 100,000 calls/month
 
-3. **Telegram Bot** (opcional)
+3. **Telegram Bot** (optional)
    - Bot token
    - Chat ID
 
 ---
 
-## 🚀 Setup Rápido
+## 🚀 Quick Setup
 
-### 1. Configurar Secrets en GitHub
+### 1. Configure Secrets in GitHub
 
 **Settings → Secrets and variables → Actions**
 
 ```
-KRAKEN_API_KEY=tu_kraken_key
-KRAKEN_API_SECRET=tu_kraken_secret
-CRYPTOCOMPARE_API_KEY=tu_cryptocompare_key  # NUEVO
-TELEGRAM_BOT_TOKEN=tu_telegram_token
-TELEGRAM_CHAT_ID=tu_chat_id
+KRAKEN_API_KEY=your_kraken_key
+KRAKEN_API_SECRET=your_kraken_secret
+CRYPTOCOMPARE_API_KEY=your_cryptocompare_key  # NEW
+TELEGRAM_BOT_TOKEN=your_telegram_token
+TELEGRAM_CHAT_ID=your_chat_id
 ```
 
-### 2. Estructura de Archivos
+### 2. File Structure
 
 ```
-tu-repo/
+your-repo/
 ├── .github/
 │   └── workflows/
 │       └── trading-bot-v4.yml
-├── kraken_bot_v3_multi_asset.py  # Bot base (V3)
-├── sentiment_analyzer.py          # NUEVO
-├── onchain_metrics.py             # NUEVO
-├── ensemble_strategies.py         # NUEVO
-├── rl_position_sizing.py          # NUEVO
-├── requirements.txt               # Actualizado
+├── kraken_bot_v3_multi_asset.py  # Base bot (V3)
+├── sentiment_analyzer.py          # NEW
+├── onchain_metrics.py             # NEW
+├── ensemble_strategies.py         # NEW
+├── rl_position_sizing.py          # NEW
+├── requirements.txt               # Updated
 └── README_V4.md
 ```
 
-### 3. Actualizar requirements.txt
+### 3. Update requirements.txt
 
 ```txt
 requests>=2.31.0
@@ -95,89 +95,89 @@ yfinance>=1.0
 pandas>=2.0.0
 numpy>=1.24.0
 matplotlib>=3.7.0
-scikit-learn>=1.3.0  # Para ML adicional
+scikit-learn>=1.3.0  # For additional ML
 ```
 
 ---
 
-## ⚙️ Configuración
+## ⚙️ Configuration
 
-### Variables de Entorno
+### Environment Variables
 
-En `trading-bot-v4.yml`:
+In `trading-bot-v4.yml`:
 
 ```yaml
 # APIs
 KRAKEN_API_KEY: ${{ secrets.KRAKEN_API_KEY }}
 KRAKEN_API_SECRET: ${{ secrets.KRAKEN_API_SECRET }}
-CRYPTOCOMPARE_API_KEY: ${{ secrets.CRYPTOCOMPARE_API_KEY }}  # NUEVO
+CRYPTOCOMPARE_API_KEY: ${{ secrets.CRYPTOCOMPARE_API_KEY }}  # NEW
 
 # Sentiment Analysis
-USE_SENTIMENT_ANALYSIS: 'true'           # NUEVO
-MIN_SENTIMENT_CONFIDENCE: '0.5'          # NUEVO
+USE_SENTIMENT_ANALYSIS: 'true'           # NEW
+MIN_SENTIMENT_CONFIDENCE: '0.5'          # NEW
 
 # On-Chain Analysis  
-USE_ONCHAIN_ANALYSIS: 'true'             # NUEVO
-MIN_ONCHAIN_STRENGTH: '0.5'              # NUEVO
+USE_ONCHAIN_ANALYSIS: 'true'             # NEW
+MIN_ONCHAIN_STRENGTH: '0.5'              # NEW
 
 # Ensemble System
-USE_ENSEMBLE_SYSTEM: 'true'              # NUEVO
-MIN_ENSEMBLE_CONSENSUS: '0.5'            # NUEVO
-MIN_ENSEMBLE_CONFIDENCE: '0.5'           # NUEVO
+USE_ENSEMBLE_SYSTEM: 'true'              # NEW
+MIN_ENSEMBLE_CONSENSUS: '0.5'            # NEW
+MIN_ENSEMBLE_CONFIDENCE: '0.5'           # NEW
 
 # Reinforcement Learning
-USE_RL_POSITION_SIZING: 'true'           # NUEVO
-RL_LEARNING_RATE: '0.1'                  # NUEVO
-RL_EPSILON: '0.1'                        # NUEVO
+USE_RL_POSITION_SIZING: 'true'           # NEW
+RL_LEARNING_RATE: '0.1'                  # NEW
+RL_EPSILON: '0.1'                        # NEW
 
 # Strategy Weights (Ensemble)
-WEIGHT_SWING: '0.30'                     # NUEVO
-WEIGHT_MOMENTUM: '0.25'                  # NUEVO
-WEIGHT_MEAN_REVERSION: '0.25'            # NUEVO
-WEIGHT_TREND_FOLLOWING: '0.20'           # NUEVO
+WEIGHT_SWING: '0.30'                     # NEW
+WEIGHT_MOMENTUM: '0.25'                  # NEW
+WEIGHT_MEAN_REVERSION: '0.25'            # NEW
+WEIGHT_TREND_FOLLOWING: '0.20'           # NEW
 
 # Trading (existing)
 MAX_POSITIONS: '3'
 LEVERAGE: '3'
 STOP_LOSS_PCT: '4.0'
 TAKE_PROFIT_PCT: '8.0'
-# ... resto de configuración V3
+# ... rest of V3 configuration
 ```
 
 ---
 
-## 🎮 Uso del Sistema
+## 🎮 Using the System
 
-### Flujo de Decisión V4
+### V4 Decision Flow
 
 ```
-1. Obtener datos de mercado (yfinance)
+1. Fetch market data (yfinance)
    ↓
-2. Análisis Multi-Layer:
+2. Multi-Layer Analysis:
    ├─ Swing Detection (V3)
-   ├─ Sentiment Analysis (NEWS + SOCIAL) ← NUEVO
-   ├─ On-Chain Metrics (BLOCKCHAIN) ← NUEVO
-   └─ Ensemble Strategies (4 estrategias) ← NUEVO
+   ├─ Sentiment Analysis (NEWS + SOCIAL) ← NEW
+   ├─ On-Chain Metrics (BLOCKCHAIN) ← NEW
+   └─ Ensemble Strategies (4 strategies) ← NEW
    ↓
-3. Decisión Agregada:
-   - Todas las capas deben estar alineadas
-   - Consenso mínimo requerido
-   - Confianza mínima requerida
+3. Aggregated Decision:
+   - All layers must be aligned
+   - Minimum consensus required
+   - Minimum confidence required
    ↓
-4. RL Position Sizing: ← NUEVO
-   - Calcula estado del mercado
-   - Selecciona mejor acción
-   - Determina capital y leverage óptimos
+4. RL Position Sizing: ← NEW
+   - Calculate market state
+   - Select best action
+   - Determine optimal capital and leverage
    ↓
-5. Ejecutar Trade
+5. Execute Trade
    ↓
-6. Actualizar RL Agent:
-   - Calcular reward
-   - Actualizar Q-values
-   - Guardar conocimiento
+6. Update RL Agent:
+   - Calculate reward
+   - Update Q-values
+   - Save knowledge
 ```
 
-### Ejemplo de Salida
+### Example Output
 
 ```
 ═══════════════════════════════════════════════════════════
@@ -187,10 +187,10 @@ KRAKEN TRADING BOT V4 - ADVANCED AI SYSTEM
 Mode: 🧪 SIMULATION
 
 💰 Balance: 1,250.50 EUR
-   Margin disponible: 1,100.00 EUR
-   Posiciones abiertas: 1/3
+   Available margin: 1,100.00 EUR
+   Open positions: 1/3
 
-🔍 Analizando BTC-USD...
+🔍 Analyzing BTC-USD...
 
    💭 Sentiment: Overall=0.45 (BULLISH)
       News=0.40, Social=0.50, Confidence=1.0
@@ -214,103 +214,103 @@ Mode: 🧪 SIMULATION
       Decision: $400.00 @ 4x leverage
       (Alloc: 40%, Lev mult: 1.3x)
 
-🟢 Abriendo BUY en BTC-USD
-   Precio: $42,350.00
-   Volumen: 0.0094
+🟢 Opening BUY on BTC-USD
+   Price: $42,350.00
+   Volume: 0.0094
    Leverage: 4x
-   Margen: 400.00 EUR
+   Margin: 400.00 EUR
    
-   Confianza Ensemble: 78%
+   Ensemble Confidence: 78%
    Sentiment: BULLISH (0.45)
    OnChain: BULLISH (0.65)
 
-✅ Orden ejecutada
+✅ Order executed
 ```
 
 ---
 
-## 📊 Sistema Ensemble Detallado
+## 📊 Ensemble System in Detail
 
-### Estrategias Incluidas
+### Included Strategies
 
 #### 1. **Swing Trading**
-- Detección de intermediate highs/lows
-- Validación con volumen
-- ML scoring de calidad
+- Intermediate highs/lows detection
+- Volume validation
+- ML quality scoring
 
 #### 2. **Momentum Strategy**
 - RSI (Relative Strength Index)
 - Rate of Change (ROC)
-- Confirmación de volumen
-- Detecta breakouts y reversiones
+- Volume confirmation
+- Detects breakouts and reversals
 
 #### 3. **Mean Reversion**
 - Bollinger Bands
 - Oversold/Overbought zones
-- Ideal para mercados laterales
+- Ideal for sideways markets
 
 #### 4. **Trend Following**
 - Moving Average crossovers
 - Golden/Death crosses
 - Trend strength measurement
 
-### Pesos por Defecto
+### Default Weights
 
-| Estrategia | Peso | Cuándo es Mejor |
+| Strategy | Weight | When It Works Best |
 |------------|------|------------------|
-| Swing | 30% | Mercados con rangos definidos |
-| Momentum | 25% | Breakouts y tendencias fuertes |
-| Mean Reversion | 25% | Mercados laterales |
-| Trend Following | 20% | Tendencias sostenidas |
+| Swing | 30% | Markets with defined ranges |
+| Momentum | 25% | Breakouts and strong trends |
+| Mean Reversion | 25% | Sideways markets |
+| Trend Following | 20% | Sustained trends |
 
-**Personalizable** en configuración.
+**Customizable** in configuration.
 
 ---
 
 ## 🤖 Reinforcement Learning
 
-### ¿Cómo Funciona?
+### How Does It Work?
 
-1. **Estado del Mercado** (6 features):
-   - Volatilidad actual
-   - Fuerza de tendencia
-   - Win rate reciente
-   - Drawdown actual
-   - Posiciones abiertas
-   - Confianza de señal
+1. **Market State** (6 features):
+   - Current volatility
+   - Trend strength
+   - Recent win rate
+   - Current drawdown
+   - Open positions
+   - Signal confidence
 
-2. **Acciones Disponibles** (15 combinaciones):
+2. **Available Actions** (15 combinations):
    - Allocation: 20%, 33%, 50%, 70%, 100%
    - Leverage multiplier: 0.5x, 1.0x, 1.5x
 
-3. **Recompensas**:
-   - Basadas en PnL% del trade
-   - Bonificación por trades grandes ganadores
-   - Penalización por grandes pérdidas
-   - Bonus por uso correcto de stops
+3. **Rewards**:
+   - Based on trade PnL%
+   - Bonus for large winning trades
+   - Penalty for large losses
+   - Bonus for correct stop usage
 
-4. **Aprendizaje**:
-   - Q-Learning con estados discretizados
+4. **Learning**:
+   - Q-Learning with discretized states
    - Epsilon-greedy exploration (10%)
    - Learning rate: 0.1
    - Discount factor: 0.95
 
-### Persistencia
+### Persistence
 
-- Q-table se guarda en `rl_state.json`
-- Se carga automáticamente en cada ejecución
-- Mejora con el tiempo según resultados
+- Q-table is saved in `rl_state.json`
+- Loaded automatically on each run
+- Improves over time based on results
 
 ---
 
 ## 🔬 Backtesting
 
-El sistema V4 es compatible con el backtester V3 existente. Para integrar las nuevas funcionalidades:
+The V4 system is compatible with the existing V3 backtester. To integrate the new features:
 
-### Backtesting con Ensemble
+### Backtesting with Ensemble
 
 ```python
-# En backtest_v3_walkforward.py, modificar:
+# In backtest_v3_walkforward.py, modify:
 
 from ensemble_strategies import EnsembleSystem
 
@@ -320,49 +320,49 @@ class BacktesterV4(BacktesterV3):
         self.ensemble = EnsembleSystem()
     
     def _look_for_signals(self, current_date, current_prices):
-        # ... código existente ...
+        # ... existing code ...
         
         for symbol, data in data_up_to_date.items():
             # Swing signal
             signal, signal_price, confidence = self.detectors[symbol].get_signal_at_date(current_date)
             
             if signal:
-                # Verificar con ensemble
+                # Verify with ensemble
                 ensemble_decision = self.ensemble.get_ensemble_decision(
                     data, (signal, signal_price, confidence)
                 )
                 
                 if (ensemble_decision.final_signal == signal and 
                     ensemble_decision.consensus_level > 0.5):
-                    # Proceder con el trade
+                    # Proceed with the trade
                     pass
 ```
 
 ---
 
-## 📈 Métricas y Monitoring
+## 📈 Metrics and Monitoring
 
-### Nuevas Métricas V4
+### New V4 Metrics
 
 1. **Sentiment Accuracy**
-   - Correlación sentiment vs performance
-   - True positive rate de señales bullish/bearish
+   - Sentiment vs performance correlation
+   - True positive rate of bullish/bearish signals
 
 2. **Ensemble Performance**
-   - Win rate por estrategia individual
-   - Consenso promedio en trades ganadores vs perdedores
-   - Contribución de cada estrategia al PnL total
+   - Win rate per individual strategy
+   - Average consensus in winning vs losing trades
+   - Contribution of each strategy to total PnL
 
 3. **RL Learning Progress**
-   - Evolución de Q-values
+   - Q-values evolution
    - Exploration vs exploitation ratio
-   - Reward promedio por episodio
+   - Average reward per episode
 
 4. **On-Chain Signal Accuracy**
-   - Precisión de exchange flow signals
-   - Active addresses correlation con price movement
+   - Exchange flow signal accuracy
+   - Active addresses correlation with price movement
 
-### Dashboard Sugerido
+### Suggested Dashboard
 
 ```python
 import matplotlib.pyplot as plt
@@ -395,58 +395,58 @@ def plot_v4_metrics(trades_df):
 
 ---
 
-## 🎯 Estrategias Recomendadas
+## 🎯 Recommended Strategies
 
-### Perfil Conservador
+### Conservative Profile
 
 ```yaml
-# Configuración conservadora con IA
+# Conservative configuration with AI
 MAX_POSITIONS: '2'
 LEVERAGE: '2'
 
-# Sentiment & OnChain muy estrictos
+# Very strict Sentiment & OnChain
 MIN_SENTIMENT_CONFIDENCE: '0.7'
 MIN_ONCHAIN_STRENGTH: '0.7'
 
-# Ensemble requiere alto consenso
-MIN_ENSEMBLE_CONSENSUS: '0.75'  # 3/4 estrategias deben coincidir
+# Ensemble requires high consensus
+MIN_ENSEMBLE_CONSENSUS: '0.75'  # 3/4 strategies must agree
 MIN_ENSEMBLE_CONFIDENCE: '0.7'
 
-# RL explorará menos
+# RL will explore less
 RL_EPSILON: '0.05'
 
-# Pesos equilibrados
+# Balanced weights
 WEIGHT_SWING: '0.25'
 WEIGHT_MOMENTUM: '0.25'
-WEIGHT_MEAN_REVERSION: '0.30'  # Mayor en laterales
+WEIGHT_MEAN_REVERSION: '0.30'  # Higher in sideways markets
 WEIGHT_TREND_FOLLOWING: '0.20'
 ```
 
-### Perfil Agresivo (IA Experimental)
+### Aggressive Profile (Experimental AI)
 
 ```yaml
 MAX_POSITIONS: '4'
 LEVERAGE: '5'
 
-# Menos restrictivo
+# Less restrictive
 MIN_SENTIMENT_CONFIDENCE: '0.3'
 MIN_ONCHAIN_STRENGTH: '0.3'
 
-# Menor consenso requerido
-MIN_ENSEMBLE_CONSENSUS: '0.5'  # 2/4 basta
+# Lower consensus required
+MIN_ENSEMBLE_CONSENSUS: '0.5'  # 2/4 is enough
 MIN_ENSEMBLE_CONFIDENCE: '0.5'
 
-# RL explora más
-RL_EPSILON: '0.2'  # 20% exploración
+# RL explores more
+RL_EPSILON: '0.2'  # 20% exploration
 
-# Pesos a momentum y trend
+# Weights favor momentum and trend
 WEIGHT_SWING: '0.20'
-WEIGHT_MOMENTUM: '0.35'  # Más agresivo
+WEIGHT_MOMENTUM: '0.35'  # More aggressive
 WEIGHT_MEAN_REVERSION: '0.15'
 WEIGHT_TREND_FOLLOWING: '0.30'
 ```
 
-### Perfil Balanced (Recomendado)
+### Balanced Profile (Recommended)
 
 ```yaml
 MAX_POSITIONS: '3'
@@ -460,7 +460,7 @@ MIN_ENSEMBLE_CONFIDENCE: '0.6'
 
 RL_EPSILON: '0.1'
 
-# Pesos default
+# Default weights
 WEIGHT_SWING: '0.30'
 WEIGHT_MOMENTUM: '0.25'
 WEIGHT_MEAN_REVERSION: '0.25'
@@ -474,33 +474,33 @@ WEIGHT_TREND_FOLLOWING: '0.20'
 ### CryptoCompare API Issues
 
 **Error: API key invalid**
-- Verifica que el secret esté configurado correctamente
-- Asegúrate de que la key esté activa en CryptoCompare
+- Verify that the secret is configured correctly
+- Make sure the key is active on CryptoCompare
 
 **Error: Rate limit exceeded**
 - Free tier: 100k calls/month
-- Añade más cache en los módulos
-- Aumenta `cache_duration` en analyzers
+- Add more cache in the modules
+- Increase `cache_duration` in analyzers
 
-### RL No Mejora
+### RL Not Improving
 
-**Síntomas**: Q-values no cambian, siempre misma acción
-- Verifica que `rl_state.json` se esté guardando
-- Aumenta `RL_EPSILON` para más exploración
-- Revisa que rewards se estén calculando correctamente
+**Symptoms**: Q-values don't change, always the same action
+- Verify that `rl_state.json` is being saved
+- Increase `RL_EPSILON` for more exploration
+- Check that rewards are being calculated correctly
 
-**Solución**: Elimina `rl_state.json` para reset completo
+**Solution**: Delete `rl_state.json` for a complete reset
 
-### Ensemble Nunca Opera
+### Ensemble Never Trades
 
-**Síntomas**: Siempre sin señal o consenso muy bajo
-- Reduce `MIN_ENSEMBLE_CONSENSUS` (ej: 0.5)
-- Ajusta pesos de estrategias
-- Verifica que datos tengan suficiente historial (180 días)
+**Symptoms**: Always no signal or very low consensus
+- Reduce `MIN_ENSEMBLE_CONSENSUS` (e.g.: 0.5)
+- Adjust strategy weights
+- Verify that data has sufficient history (180 days)
 
 ---
 
-## 📚 Documentación API
+## 📚 API Documentation
 
 ### Sentiment Analyzer
 
@@ -514,7 +514,7 @@ print(f"Overall: {sentiment.overall_score}")
 print(f"Bullish: {sentiment.is_bullish()}")
 print(f"Bearish: {sentiment.is_bearish()}")
 
-# Usar en decisión
+# Use in decision
 can_trade = should_trade_based_on_sentiment(
     sentiment, 'BUY', min_confidence=0.5
 )
@@ -570,7 +570,7 @@ capital, leverage = calculator.get_optimal_size(
     training=True
 )
 
-# Después del trade
+# After the trade
 reward = rl_sizer.calculate_reward(trade_result)
 rl_sizer.update_q_value(state, action_idx, reward, next_state)
 rl_sizer.save_state()
@@ -578,133 +578,133 @@ rl_sizer.save_state()
 
 ---
 
-## 🚦 Roadmap Futuro
+## 🚦 Future Roadmap
 
 ### V4.1 - Short Term
-- [ ] Integración con más fuentes de sentiment (Twitter API v2)
-- [ ] Métricas on-chain desde Glassnode/CryptoQuant
-- [ ] Dashboard web en tiempo real
-- [ ] Backtesting completo con todas las features V4
+- [ ] Integration with more sentiment sources (Twitter API v2)
+- [ ] On-chain metrics from Glassnode/CryptoQuant
+- [ ] Real-time web dashboard
+- [ ] Full backtesting with all V4 features
 
 ### V4.2 - Medium Term  
-- [ ] Deep RL (DQN/PPO) en lugar de Q-Learning
-- [ ] Ensemble con meta-learning
-- [ ] Optimización bayesiana de hiperparámetros
+- [ ] Deep RL (DQN/PPO) instead of Q-Learning
+- [ ] Ensemble with meta-learning
+- [ ] Bayesian hyperparameter optimization
 - [ ] Multi-timeframe analysis
 
 ### V5.0 - Long Term
-- [ ] LLM integration para análisis de noticias
-- [ ] Predicción de volatilidad con LSTM
-- [ ] Portfolio optimization con Markowitz
-- [ ] Auto-tuning completo del sistema
+- [ ] LLM integration for news analysis
+- [ ] Volatility prediction with LSTM
+- [ ] Portfolio optimization with Markowitz
+- [ ] Full system auto-tuning
 
 ---
 
-## 📄 Licencia
+## 📄 License
 
-MIT License - Usa bajo tu propio riesgo
+MIT License - Use at your own risk
 
 ---
 
 ## ⚠️ Disclaimer
 
-**Este bot es experimental y educativo.**
+**This bot is experimental and educational.**
 
-- Los mercados son impredecibles
-- RL y ML pueden fallar en condiciones no vistas
-- SIEMPRE empieza en modo simulación
-- No inviertas más de lo que puedes perder
-- Monitorea el bot constantemente
-- Las APIs externas pueden fallar o cambiar
-- El performance pasado no garantiza resultados futuros
+- Markets are unpredictable
+- RL and ML can fail in unseen conditions
+- ALWAYS start in simulation mode
+- Do not invest more than you can afford to lose
+- Monitor the bot constantly
+- External APIs can fail or change
+- Past performance does not guarantee future results
 
-**El sistema V4 es más complejo = más puntos de falla potenciales.**
+**The V4 system is more complex = more potential points of failure.**
 
 ---
 
-## 🆘 Soporte
+## 🆘 Support
 
-### Logs y Debug
+### Logs and Debug
 
-1. GitHub Actions → Workflow runs → Ver logs
-2. Buscar errores en cada módulo:
+1. GitHub Actions → Workflow runs → View logs
+2. Look for errors in each module:
    - `sentiment_analyzer`
    - `onchain_metrics`
    - `ensemble_strategies`
    - `rl_position_sizing`
 
-### Issues Comunes
+### Common Issues
 
-- **No genera señales**: Ajusta thresholds, verifica datos
-- **RL siempre explora**: Normal al inicio, converge tras ~50 trades
-- **Sentiment siempre neutral**: Verifica API key, revisa rate limits
-- **Ensemble indeciso**: Reduce `MIN_ENSEMBLE_CONSENSUS`
-
----
-
-## 🙏 Contribuciones
-
-Pull requests bienvenidos para:
-- Nuevas estrategias para ensemble
-- Mejoras en RL agent
-- Más fuentes de sentiment/on-chain
-- Optimizaciones de performance
-- Documentación
+- **No signals generated**: Adjust thresholds, verify data
+- **RL always explores**: Normal at the start, converges after ~50 trades
+- **Sentiment always neutral**: Verify API key, check rate limits
+- **Ensemble indecisive**: Reduce `MIN_ENSEMBLE_CONSENSUS`
 
 ---
 
-## 📞 Contacto
+## 🙏 Contributions
 
-Para dudas técnicas o reportar bugs, abre un Issue en GitHub.
+Pull requests welcome for:
+- New strategies for ensemble
+- RL agent improvements
+- More sentiment/on-chain sources
+- Performance optimizations
+- Documentation
+
+---
+
+## 📞 Contact
+
+For technical questions or to report bugs, open an Issue on GitHub.
 
 ---
 
 **🚀 Happy AI Trading!**
 
-*V4.0 - Advanced AI System - Diciembre 2024*
+*V4.0 - Advanced AI System - December 2024*
 
-# 🔄 Cambios Clave en trading-bot-v4.yml
+# 🔄 Key Changes in trading-bot-v4.yml
 
-## ✅ Archivo Actualizado
+## ✅ Updated File
 
-Reemplaza tu `trading-bot-v4.yml` actual por la nueva versión.
+Replace your current `trading-bot-v4.yml` with the new version.
 
 ---
 
-## 📝 Cambios Principales
+## 📝 Main Changes
 
-### 1. **Nombre del archivo ejecutable corregido**
+### 1. **Corrected executable file name**
 
 ```yaml
-# ANTES (en tu archivo original):
+# BEFORE (in your original file):
 python kraken_bot_v4_advanced.py
 
-# AHORA (actualizado):
-python kraken_bot_v4_advanced.py  # ✓ Nombre correcto
+# NOW (updated):
+python kraken_bot_v4_advanced.py  # ✓ Correct name
 ```
 
-### 2. **Cache del RL State mejorado**
+### 2. **Improved RL State cache**
 
 ```yaml
-# ANTES: Cache básico
+# BEFORE: Basic cache
 - uses: actions/cache@v3
 
-# AHORA: Cache con restore-keys mejorado
-- name: 📂 Cargar RL State
+# NOW: Cache with improved restore-keys
+- name: 📂 Load RL State
   uses: actions/cache@v3
   with:
     path: rl_state.json
     key: rl-state-${{ github.run_number }}
     restore-keys: |
-      rl-state-    # ✓ Busca estados previos
+      rl-state-    # ✓ Searches for previous states
 ```
 
-**Beneficio:** El RL agent mantiene su aprendizaje entre ejecuciones.
+**Benefit:** The RL agent retains its learning between runs.
 
-### 3. **Variables de entorno organizadas**
+### 3. **Organized environment variables**
 
 ```yaml
-# Ahora con secciones claras:
+# Now with clear sections:
 # ═══ APIS ═══
 # ═══ SENTIMENT ANALYSIS (V4) ═══
 # ═══ ON-CHAIN ANALYSIS (V4) ═══
@@ -716,23 +716,23 @@ python kraken_bot_v4_advanced.py  # ✓ Nombre correcto
 # ═══ MODE ═══
 ```
 
-**Beneficio:** Más fácil de entender y modificar.
+**Benefit:** Easier to understand and modify.
 
-### 4. **Inputs manuales para testing**
+### 4. **Manual inputs for testing**
 
 ```yaml
 workflow_dispatch:
   inputs:
     dry_run: 'true'
-    use_sentiment: 'true'   # ✓ Activar/desactivar individualmente
+    use_sentiment: 'true'   # ✓ Enable/disable individually
     use_onchain: 'true'
     use_ensemble: 'true'
     use_rl: 'true'
 ```
 
-**Beneficio:** Puedes probar cada feature por separado.
+**Benefit:** You can test each feature separately.
 
-### 5. **Echo mejorado con info del bot**
+### 5. **Improved echo with bot info**
 
 ```yaml
 run: |
@@ -743,23 +743,23 @@ run: |
   echo "   RL Position Sizing: $USE_RL_POSITION_SIZING"
 ```
 
-**Beneficio:** Ves inmediatamente qué features están activas.
+**Benefit:** You immediately see which features are active.
 
 ---
 
-## 🎯 Configuraciones Recomendadas
+## 🎯 Recommended Configurations
 
-### Para Testing Inicial
+### For Initial Testing
 
 ```yaml
-# En las variables de entorno, ajusta:
-DRY_RUN: 'true'              # ✓ SIMULACIÓN
-MAX_POSITIONS: '1'           # ✓ Solo 1 posición
-LEVERAGE: '2'                # ✓ Leverage bajo
-MIN_ENSEMBLE_CONSENSUS: '0.75'  # ✓ Muy conservador
+# In environment variables, adjust:
+DRY_RUN: 'true'              # ✓ SIMULATION
+MAX_POSITIONS: '1'           # ✓ Only 1 position
+LEVERAGE: '2'                # ✓ Low leverage
+MIN_ENSEMBLE_CONSENSUS: '0.75'  # ✓ Very conservative
 ```
 
-### Para Producción Conservadora
+### For Conservative Production
 
 ```yaml
 DRY_RUN: 'false'             # ⚠️ REAL
@@ -770,7 +770,7 @@ MIN_SENTIMENT_CONFIDENCE: '0.6'
 MIN_ONCHAIN_STRENGTH: '0.6'
 ```
 
-### Para Producción Agresiva
+### For Aggressive Production
 
 ```yaml
 DRY_RUN: 'false'             # ⚠️ REAL
@@ -779,45 +779,45 @@ LEVERAGE: '4'
 MIN_ENSEMBLE_CONSENSUS: '0.5'
 MIN_SENTIMENT_CONFIDENCE: '0.4'
 MIN_ONCHAIN_STRENGTH: '0.4'
-RL_EPSILON: '0.15'           # Más exploración
+RL_EPSILON: '0.15'           # More exploration
 ```
 
 ---
 
-## 🔍 Cómo Ejecutar Manualmente
+## 🔍 How to Run Manually
 
-### 1. Ve a tu repositorio en GitHub
+### 1. Go to your repository on GitHub
 
-### 2. Click en "Actions"
+### 2. Click on "Actions"
 
-### 3. Selecciona "Kraken Trading Bot V4 - Advanced AI"
+### 3. Select "Kraken Trading Bot V4 - Advanced AI"
 
 ### 4. Click "Run workflow"
 
-### 5. Configura opciones:
+### 5. Configure options:
 
 ```
-dry_run: true               ← Empieza con simulación
-use_sentiment: true         ← Activa sentiment
-use_onchain: true          ← Activa on-chain
-use_ensemble: true         ← Activa ensemble
-use_rl: true               ← Activa RL
+dry_run: true               ← Start with simulation
+use_sentiment: true         ← Enable sentiment
+use_onchain: true          ← Enable on-chain
+use_ensemble: true         ← Enable ensemble
+use_rl: true               ← Enable RL
 ```
 
-### 6. Click "Run workflow" (verde)
+### 6. Click "Run workflow" (green)
 
-### 7. Espera 2-3 minutos
+### 7. Wait 2-3 minutes
 
-### 8. Revisa los logs:
-- Click en el workflow que acaba de ejecutarse
-- Click en "trade"
-- Verás todos los logs del bot
+### 8. Review the logs:
+- Click on the workflow that just ran
+- Click on "trade"
+- You will see all bot logs
 
 ---
 
-## 📊 Qué Esperar en los Logs
+## 📊 What to Expect in the Logs
 
-### Inicio:
+### Startup:
 ```
 ════════════════════════════════════════════════════════════════════
 🚀 KRAKEN TRADING BOT V4 - ADVANCED AI SYSTEM
@@ -833,61 +833,61 @@ use_rl: true               ← Activa RL
 ════════════════════════════════════════════════════════════════════
 ```
 
-### Durante ejecución:
+### During execution:
 ```
 🚀 INITIALIZING KRAKEN TRADING BOT V4
-   ✓ Sentiment Analyzer activado
-   ✓ On-Chain Analyzer activado
-   ✓ Ensemble System activado
-   ✓ RL Position Sizing activado
+   ✓ Sentiment Analyzer enabled
+   ✓ On-Chain Analyzer enabled
+   ✓ Ensemble System enabled
+   ✓ RL Position Sizing enabled
 
 💰 Balance: 1,250.50 EUR
-   Margen disponible: 1,100.00 EUR
+   Available margin: 1,100.00 EUR
 
-📊 Descargando datos multi-asset...
-   ✓ BTC-USD: 4320 velas
-   ✓ ETH-USD: 4320 velas
+📊 Downloading multi-asset data...
+   ✓ BTC-USD: 4320 candles
+   ✓ ETH-USD: 4320 candles
    ...
 
-🔍 Buscando señales con análisis V4...
+🔍 Searching for signals with V4 analysis...
 
-   🎯 BTC-USD: Señal BUY detectada
+   🎯 BTC-USD: BUY signal detected
 
    📊 Layer 1: Sentiment Analysis
-   ✓ Sentiment confirma
+   ✓ Sentiment confirms
 
    🔗 Layer 2: On-Chain Metrics
-   ✓ On-Chain confirma
+   ✓ On-Chain confirms
 
    🎯 Layer 3: Ensemble Strategies
-   ✓ Ensemble confirma con 75% consenso
+   ✓ Ensemble confirms with 75% consensus
 
    🤖 Layer 4: RL Position Sizing
    RL: $400.00 @ 3x
 
-✅ DECISIÓN: BUY
-   Confianza final: 78%
+✅ DECISION: BUY
+   Final confidence: 78%
 
-🟢 Abriendo BUY en BTC-USD
+🟢 Opening BUY on BTC-USD
    ...
 ```
 
 ---
 
-## ⚠️ Errores Comunes
+## ⚠️ Common Errors
 
 ### Error: "CRYPTOCOMPARE_API_KEY not set"
 
-**Solución:**
-1. Ve a Settings → Secrets → Actions
-2. Agrega `CRYPTOCOMPARE_API_KEY`
-3. Valor: tu key de CryptoCompare
+**Solution:**
+1. Go to Settings → Secrets → Actions
+2. Add `CRYPTOCOMPARE_API_KEY`
+3. Value: your CryptoCompare key
 
 ### Error: "Module 'sentiment_analyzer' not found"
 
-**Solución:**
+**Solution:**
 ```bash
-# Verifica que todos los archivos V4 estén en el repo:
+# Verify that all V4 files are in the repo:
 git add sentiment_analyzer.py
 git add onchain_metrics.py
 git add ensemble_strategies.py
@@ -898,9 +898,9 @@ git push
 
 ### Error: "kraken_bot_v4_advanced.py: No such file"
 
-**Solución:**
+**Solution:**
 ```bash
-# Asegúrate que el archivo principal está:
+# Make sure the main file is present:
 git add kraken_bot_v4_advanced.py
 git commit -m "Add V4 main bot"
 git push
@@ -908,48 +908,48 @@ git push
 
 ---
 
-## 🔄 Ejecución Automática
+## 🔄 Automatic Execution
 
-El workflow se ejecuta **automáticamente cada 15 minutos**.
+The workflow runs **automatically every 15 minutes**.
 
-Para cambiar la frecuencia:
+To change the frequency:
 
 ```yaml
 schedule:
-  - cron: '*/30 * * * *'  # Cada 30 minutos
-  # O
-  - cron: '0 * * * *'     # Cada hora
-  # O
-  - cron: '0 */2 * * *'   # Cada 2 horas
+  - cron: '*/30 * * * *'  # Every 30 minutes
+  # Or
+  - cron: '0 * * * *'     # Every hour
+  # Or
+  - cron: '0 */2 * * *'   # Every 2 hours
 ```
 
 ---
 
-## ✅ Checklist Final
+## ✅ Final Checklist
 
-Antes de hacer push:
+Before pushing:
 
-- [ ] `trading-bot-v4.yml` actualizado en `.github/workflows/`
-- [ ] `kraken_bot_v4_advanced.py` en la raíz del repo
-- [ ] Todos los módulos V4 presentes:
+- [ ] `trading-bot-v4.yml` updated in `.github/workflows/`
+- [ ] `kraken_bot_v4_advanced.py` in the repo root
+- [ ] All V4 modules present:
   - [ ] `sentiment_analyzer.py`
   - [ ] `onchain_metrics.py`
   - [ ] `ensemble_strategies.py`
   - [ ] `rl_position_sizing.py`
-- [ ] `requirements.txt` actualizado
-- [ ] Secrets configurados en GitHub:
+- [ ] `requirements.txt` updated
+- [ ] Secrets configured in GitHub:
   - [ ] `KRAKEN_API_KEY`
   - [ ] `KRAKEN_API_SECRET`
   - [ ] `CRYPTOCOMPARE_API_KEY`
-  - [ ] `TELEGRAM_BOT_TOKEN` (opcional)
-  - [ ] `TELEGRAM_CHAT_ID` (opcional)
+  - [ ] `TELEGRAM_BOT_TOKEN` (optional)
+  - [ ] `TELEGRAM_CHAT_ID` (optional)
 
 ---
 
-## 🚀 Comando para subir todo
+## 🚀 Command to push everything
 
 ```bash
-# 1. Agregar todos los archivos nuevos
+# 1. Add all new files
 git add .github/workflows/trading-bot-v4.yml
 git add kraken_bot_v4_advanced.py
 git add sentiment_analyzer.py
@@ -964,9 +964,9 @@ git commit -m "Add complete V4 system with AI features"
 # 3. Push
 git push
 
-# 4. Ve a GitHub Actions y ejecuta manualmente
+# 4. Go to GitHub Actions and run manually
 ```
 
 ---
 
-**🎉 ¡Workflow actualizado y listo para V4!**
+**🎉 Workflow updated and ready for V4!**

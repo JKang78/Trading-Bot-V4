@@ -5,15 +5,19 @@ REAL-MONEY LIVE TRADER for the longer-horizon ML strategy.
 
 It trades the validated longer-horizon ML strategy (see ml_strategy.py) with a
 few conservative, user-chosen settings:
-- Coins: XRP, ADA, SOL (where the backtested edge was strongest).
-- Each trade uses 20% of usable margin, at 2x leverage.
+- Coins: XRP, ADA, SOL, LINK, DOGE (each passed walk-forward validation with
+  positive expectancy in both the early and holdout periods).
+- Each trade uses 20% of usable margin at 2x leverage, so all five coins
+  together can use the full usable margin (balance / 1.5) but never more.
 - Hold ~2 days (48 x 1h bars), then close (time-based exit).
 - At most one position per coin.
 
 Safety design
 -------------
-- Entries and exits are MARKET orders (reliable fills; a time-boxed strategy
-  must be able to get in and out on schedule).
+- Entries try a post-only LIMIT order first (cheaper maker fee) and fall back
+  to MARKET if it doesn't fill within ~90s. Exits are always MARKET orders
+  (a time-boxed strategy must be able to get out on schedule).
+- Long-only by default: the backtested short side barely covered its costs.
 - State (which positions we opened and when to close them) is saved to
   ml_live_state.json so it survives between independent cron runs.
 - Set ML_LIVE_DRY_RUN=true to run the full logic WITHOUT placing real orders
@@ -25,6 +29,7 @@ not fight over the same Kraken account.
 
 import os
 import json
+import time
 from datetime import timedelta
 from pathlib import Path
 
@@ -37,7 +42,8 @@ from ml_strategy import MLSwingStrategy
 
 # ─────────────────────────── Settings (env-overridable) ───────────────────────────
 STATE_FILE = os.getenv('ML_LIVE_STATE_FILE', 'ml_live_state.json')
-SYMBOLS = [s.strip() for s in os.getenv('ML_LIVE_SYMBOLS', 'XRP-USD,ADA-USD,SOL-USD').split(',') if s.strip()]
+SYMBOLS = [s.strip() for s in os.getenv(
+    'ML_LIVE_SYMBOLS', 'XRP-USD,ADA-USD,SOL-USD,LINK-USD,DOGE-USD').split(',') if s.strip()]
 PERIOD = os.getenv('ML_LIVE_PERIOD', '720d')
 INTERVAL = os.getenv('ML_LIVE_INTERVAL', '1h')
 HORIZON = int(os.getenv('ML_LIVE_HORIZON', '48'))
@@ -45,9 +51,19 @@ BUY_THR = float(os.getenv('ML_LIVE_BUY_THR', '0.65'))
 SELL_THR = float(os.getenv('ML_LIVE_SELL_THR', '0.35'))
 LEVERAGE = int(os.getenv('ML_LIVE_LEVERAGE', '2'))
 POSITION_FRACTION = float(os.getenv('ML_LIVE_POSITION_FRACTION', '0.20'))
-MAX_OPEN = int(os.getenv('ML_LIVE_MAX_OPEN', '3'))
+MAX_OPEN = int(os.getenv('ML_LIVE_MAX_OPEN', '5'))
 MARGIN_SAFETY_FACTOR = float(os.getenv('ML_LIVE_MARGIN_SAFETY', '1.5'))
 DRY_RUN = os.getenv('ML_LIVE_DRY_RUN', 'false').lower() == 'true'
+
+# Long-only: backtests show longs earn ~+3.0%/trade vs ~+0.9% for shorts, and
+# shorts pay extra margin costs. Set ML_LIVE_LONG_ONLY=false to re-enable shorts.
+LONG_ONLY = os.getenv('ML_LIVE_LONG_ONLY', 'true').lower() == 'true'
+
+# Maker-first entries: try a post-only LIMIT order (cheaper maker fee ~0.16%)
+# and only fall back to a MARKET order (taker fee ~0.26%) if it doesn't fill
+# within MAKER_WAIT_SEC. Entries aren't time-critical for a ~2-day hold.
+USE_MAKER_ENTRY = os.getenv('ML_LIVE_MAKER_ENTRY', 'true').lower() == 'true'
+MAKER_WAIT_SEC = int(os.getenv('ML_LIVE_MAKER_WAIT_SEC', '90'))
 
 
 def load_state() -> dict:
@@ -69,6 +85,71 @@ def save_state(state: dict) -> None:
 def pair_map(config: Config) -> dict:
     """Map yfinance symbol -> its Kraken pair + minimum order volume."""
     return {p.yf_symbol: p for p in config.TRADING_PAIRS}
+
+
+def enter_position(kraken: KrakenClient, kraken_pair: str, order_type: str,
+                   volume: float, leverage: int, fallback_price: float) -> tuple:
+    """
+    Open a position, trying the cheap way first.
+
+    1. Place a post-only LIMIT order at the best bid (buy) / best ask (sell),
+       which pays the lower maker fee if it fills.
+    2. Wait up to MAKER_WAIT_SEC, checking every few seconds.
+    3. If it hasn't fully filled, cancel it and MARKET-order the remainder,
+       so we always end up with the full position this run.
+
+    Returns (average_fill_price, how) where how is 'maker', 'taker', or 'mixed'.
+    """
+    if not USE_MAKER_ENTRY:
+        kraken.place_order(pair=kraken_pair, order_type=order_type,
+                           volume=volume, leverage=leverage, reduce_only=False)
+        return fallback_price, 'taker'
+
+    # Rest the order on our side of the spread so it can't cross (= maker).
+    try:
+        bid, ask = kraken.get_bid_ask(kraken_pair)
+        decimals = kraken.get_pair_decimals(kraken_pair)
+        limit_price = round(bid if order_type == 'buy' else ask, decimals)
+        result = kraken.place_order(pair=kraken_pair, order_type=order_type,
+                                    volume=volume, leverage=leverage, reduce_only=False,
+                                    ordertype='limit', price=limit_price, post_only=True)
+        txid = result.get('txid', [None])[0]
+    except Exception as e:
+        # Post-only rejected (e.g. price would cross) -> just take the market.
+        print(f"   maker entry failed ({e}); falling back to market")
+        kraken.place_order(pair=kraken_pair, order_type=order_type,
+                           volume=volume, leverage=leverage, reduce_only=False)
+        return fallback_price, 'taker'
+
+    if txid is None:
+        return limit_price, 'maker'  # order accepted but no txid returned; assume resting fill
+
+    # Poll until filled or out of patience.
+    deadline = time.time() + MAKER_WAIT_SEC
+    while time.time() < deadline:
+        time.sleep(5)
+        try:
+            info = kraken.query_order(txid)
+        except Exception:
+            continue
+        if info.get('status') == 'closed':
+            return float(info.get('price', limit_price) or limit_price), 'maker'
+
+    # Not (fully) filled in time: cancel and market-order whatever is missing.
+    filled_vol = 0.0
+    try:
+        kraken.cancel_order(txid)
+        info = kraken.query_order(txid)
+        filled_vol = float(info.get('vol_exec', 0) or 0)
+    except Exception as e:
+        print(f"   ⚠️ cancel/query after maker wait failed: {e}")
+
+    remaining = volume - filled_vol
+    if remaining > 0:
+        kraken.place_order(pair=kraken_pair, order_type=order_type,
+                           volume=remaining, leverage=leverage, reduce_only=False)
+    how = 'mixed' if filled_vol > 0 else 'taker'
+    return fallback_price, how
 
 
 def main() -> None:
@@ -147,6 +228,9 @@ def main() -> None:
         sig = strategy.get_signal(df)
         if sig.signal not in ('BUY', 'SELL'):
             continue
+        if LONG_ONLY and sig.signal == 'SELL':
+            actions.append(f"skip {symbol}: SELL signal ignored (long-only mode, p_up={sig.prob_up:.2f})")
+            continue
 
         current_price = float(df['Close'].iloc[-1])
         margin_usd = usable_margin * POSITION_FRACTION
@@ -160,20 +244,24 @@ def main() -> None:
         direction = 'long' if sig.signal == 'BUY' else 'short'
         now = df.index[-1]
         try:
+            fill_how = 'dry-run'
+            entry_price = current_price
             if not DRY_RUN:
-                kraken.place_order(pair=kp.kraken_pair, order_type=order_type,
-                                   volume=volume, leverage=LEVERAGE, reduce_only=False)
+                entry_price, fill_how = enter_position(
+                    kraken, kp.kraken_pair, order_type, volume, LEVERAGE, current_price)
             state['open'][symbol] = {
                 'direction': direction,
-                'entry_price': current_price,
+                'entry_price': entry_price,
                 'entry_time': str(now),
                 'exit_due': str(now + timedelta(hours=HORIZON)),
                 'volume': round(volume, 8),
                 'prob_up': round(sig.prob_up, 3),
                 'leverage': LEVERAGE,
+                'entry_fill': fill_how,
             }
-            actions.append(f"OPEN {symbol} {direction.upper()} @ {current_price:.4f} "
-                           f"vol={volume:.6f} (p_up={sig.prob_up:.2f}, margin ${margin_usd:.2f})")
+            actions.append(f"OPEN {symbol} {direction.upper()} @ {entry_price:.4f} "
+                           f"vol={volume:.6f} ({fill_how} fill, p_up={sig.prob_up:.2f}, "
+                           f"margin ${margin_usd:.2f})")
         except Exception as e:
             actions.append(f"⚠️ open {symbol} failed: {e}")
 
