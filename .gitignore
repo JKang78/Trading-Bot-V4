@@ -4,8 +4,6 @@ __pycache__/
 *.pyc
 rl_state.json
 v4_position_state.json
-strategy_router_state.json
-router_decisions.jsonl
 .DS_Store
 
 # Generated backtest / research outputs and paper-trading state

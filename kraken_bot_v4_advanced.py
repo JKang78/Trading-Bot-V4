@@ -43,6 +43,19 @@ def load_env_file(path: str = ".env") -> None:
 
 load_env_file()
 
+
+def env_csv_set(name: str, default: str, *, lower: bool = False) -> set:
+    raw = os.getenv(name, default)
+    values = set()
+    for item in raw.split(','):
+        value = item.strip()
+        if not value:
+            continue
+        if value.lower() == 'all':
+            return set()
+        values.add(value.lower() if lower else value)
+    return values
+
 # ═══════════════════════════════════════════════════════════════════════════
 #                    IMPORT V4 MODULES
 # ═══════════════════════════════════════════════════════════════════════════
@@ -172,6 +185,22 @@ class Config:
     
     USE_ML_VALIDATION = os.getenv('USE_ML_VALIDATION', 'true').lower() == 'true'
     ML_CONFIDENCE_THRESHOLD = float(os.getenv('ML_CONFIDENCE_THRESHOLD', '0.6'))
+
+    # Bear-market V4 gate. Defaults intentionally target only BTC/ETH shorts:
+    # the raw swing strategy over-trades, so standalone V4 must clear the same
+    # kind of narrow direction/trend/cost filters used by the router.
+    V4_ALLOWED_SYMBOLS = env_csv_set('V4_ALLOWED_SYMBOLS', 'BTC-USD,ETH-USD')
+    V4_ALLOWED_DIRECTIONS = env_csv_set('V4_ALLOWED_DIRECTIONS', 'short', lower=True)
+    V4_MIN_CONFIDENCE = float(os.getenv('V4_MIN_CONFIDENCE', '0.80'))
+    V4_MAX_SIGNAL_AGE_HOURS = float(os.getenv('V4_MAX_SIGNAL_AGE_HOURS', '12'))
+    V4_TREND_EMA = int(os.getenv('V4_TREND_EMA', '200'))
+    V4_MIN_EXPECTANCY_PCT = float(os.getenv('V4_MIN_EXPECTANCY_PCT', '0.25'))
+    V4_EXPECTED_HOLD_HOURS = int(os.getenv('V4_EXPECTED_HOLD_HOURS', '12'))
+    V4_MAKER_ENTRY_FEE = float(os.getenv('V4_MAKER_ENTRY_FEE', '0.0040'))
+    V4_TAKER_EXIT_FEE = float(os.getenv('V4_TAKER_EXIT_FEE', '0.0080'))
+    V4_MARGIN_OPEN_FEE = float(os.getenv('V4_MARGIN_OPEN_FEE', '0.0004'))
+    V4_ROLLOVER_FEE_4H = float(os.getenv('V4_ROLLOVER_FEE_4H', '0.0004'))
+    V4_SPREAD_SLIPPAGE_BUFFER = float(os.getenv('V4_SPREAD_SLIPPAGE_BUFFER', '0.0015'))
     
     # ══════════════════ Mode ══════════════════
     DRY_RUN = os.getenv('DRY_RUN', 'true').lower() == 'true'
@@ -921,8 +950,132 @@ class TradingBotV4:
         
         if data.empty:
             raise Exception(f"No data for {symbol}")
+
+        if data.index.tz is not None:
+            data.index = data.index.tz_localize(None)
         
         return data
+
+    @staticmethod
+    def signal_direction(signal: str) -> str:
+        return 'long' if signal == 'BUY' else 'short'
+
+    @staticmethod
+    def latest_signal_time(detector: SwingDetectorV3, signal: str) -> Optional[pd.Timestamp]:
+        points = detector.int_lows.dropna() if signal == 'BUY' else detector.int_highs.dropna()
+        if points.empty:
+            return None
+        return pd.Timestamp(points.index[-1])
+
+    def trend_filter(self, data: pd.DataFrame, direction: str) -> Tuple[bool, Dict]:
+        ema_period = self.config.V4_TREND_EMA
+        if ema_period <= 0:
+            return True, {'trend_filter': 'disabled'}
+        if len(data) < ema_period:
+            return False, {
+                'trend_filter': 'insufficient_data',
+                'ema_period': ema_period,
+                'bars': len(data),
+            }
+
+        close = data['Close']
+        ema = float(close.ewm(span=ema_period, adjust=False).mean().iloc[-1])
+        price = float(close.iloc[-1])
+        allowed = price > ema if direction == 'long' else price < ema
+        return allowed, {
+            'trend_filter': 'ema',
+            'ema_period': ema_period,
+            'price': round(price, 8),
+            'ema': round(ema, 8),
+            'price_vs_ema_pct': round((price / ema - 1) * 100, 3) if ema else 0.0,
+        }
+
+    def estimate_after_cost_expectancy(self, data: pd.DataFrame, confidence: float) -> Dict:
+        regime = RegimeDetector.detect(data, self.config.REGIME_LOOKBACK)
+        params = RegimeDetector.get_adapted_params(
+            regime,
+            self.config.BASE_STOP_LOSS,
+            self.config.BASE_TAKE_PROFIT,
+            self.config.BASE_TRAILING_STOP,
+        )
+        leverage = max(1, int(self.config.LEVERAGE))
+        stop_loss_pct = float(params['stop_loss'])
+        take_profit_pct = float(params['take_profit'])
+        win_probability = max(0.0, min(0.99, float(confidence)))
+        rollovers = max(0, int(self.config.V4_EXPECTED_HOLD_HOURS) // 4)
+        cost_fraction = (
+            self.config.V4_MAKER_ENTRY_FEE
+            + self.config.V4_TAKER_EXIT_FEE
+            + self.config.V4_MARGIN_OPEN_FEE
+            + rollovers * self.config.V4_ROLLOVER_FEE_4H
+            + self.config.V4_SPREAD_SLIPPAGE_BUFFER
+        )
+        estimated_cost_pct = cost_fraction * 100 * leverage
+        expected_gross_pct = (
+            win_probability * take_profit_pct
+            - (1.0 - win_probability) * stop_loss_pct
+        )
+        expected_net_pct = expected_gross_pct - estimated_cost_pct
+        return {
+            'regime': regime,
+            'win_probability': round(win_probability, 4),
+            'stop_loss_pct': round(stop_loss_pct, 4),
+            'take_profit_pct': round(take_profit_pct, 4),
+            'expected_hold_hours': self.config.V4_EXPECTED_HOLD_HOURS,
+            'rollovers': rollovers,
+            'estimated_cost_pct': round(estimated_cost_pct, 4),
+            'expected_gross_pct': round(expected_gross_pct, 4),
+            'expected_net_pct': round(expected_net_pct, 4),
+            'minimum_expected_net_pct': self.config.V4_MIN_EXPECTANCY_PCT,
+        }
+
+    def evaluate_v4_entry_gate(
+        self,
+        pair: TradingPair,
+        data: pd.DataFrame,
+        detector: SwingDetectorV3,
+        signal: str,
+        confidence: float,
+    ) -> Tuple[bool, Dict, List[str]]:
+        direction = self.signal_direction(signal)
+        details = {'direction': direction}
+        reasons = []
+
+        if self.config.V4_ALLOWED_SYMBOLS and pair.yf_symbol not in self.config.V4_ALLOWED_SYMBOLS:
+            reasons.append(f"symbol_not_allowed:{pair.yf_symbol}")
+        if self.config.V4_ALLOWED_DIRECTIONS and direction not in self.config.V4_ALLOWED_DIRECTIONS:
+            reasons.append(f"direction_not_allowed:{direction}")
+
+        signal_time = self.latest_signal_time(detector, signal)
+        if signal_time is None:
+            reasons.append('signal_time_unavailable')
+        else:
+            latest_time = pd.Timestamp(data.index[-1])
+            age_hours = (latest_time - signal_time).total_seconds() / 3600
+            details['signal_time'] = str(signal_time)
+            details['signal_age_hours'] = round(age_hours, 2)
+            if age_hours > self.config.V4_MAX_SIGNAL_AGE_HOURS:
+                reasons.append(f"stale_signal:{age_hours:.1f}h")
+
+        if confidence < self.config.V4_MIN_CONFIDENCE:
+            reasons.append(
+                f"confidence_below_min:{confidence:.3f}<{self.config.V4_MIN_CONFIDENCE:.3f}"
+            )
+
+        trend_ok, trend_details = self.trend_filter(data, direction)
+        details.update(trend_details)
+        if not trend_ok:
+            reasons.append('trend_filter_reject')
+
+        expectancy = self.estimate_after_cost_expectancy(data, confidence)
+        details['expectancy'] = expectancy
+        if expectancy['expected_net_pct'] < self.config.V4_MIN_EXPECTANCY_PCT:
+            reasons.append(
+                f"expectancy_below_min:{expectancy['expected_net_pct']:.3f}%"
+                f"<{self.config.V4_MIN_EXPECTANCY_PCT:.3f}%"
+            )
+
+        return not reasons, details, reasons
     
     def analyze_trading_opportunity(self, 
                                    pair: TradingPair,
@@ -1154,6 +1307,10 @@ class TradingBotV4:
             print(f"   Leverage: {leverage}x")
             print(f"   Volume: {volume:.8f}")
             print(f"   Confidence: {confidence:.2%}")
+
+            if signal == 'SELL' and leverage < 2:
+                print("   ⚠️ Short entries require Kraken margin leverage >= 2x; skipping")
+                return
             
             if not self.config.DRY_RUN:
                 order_type = 'buy' if signal == 'BUY' else 'sell'
@@ -1469,6 +1626,23 @@ class TradingBotV4:
                 if not analysis['can_trade']:
                     print(f"   ❌ Rejected by V4 analysis")
                     continue
+
+                gate_ok, gate_details, gate_reasons = self.evaluate_v4_entry_gate(
+                    pair,
+                    data,
+                    detector,
+                    signal,
+                    float(analysis.get('confidence', confidence) or 0.0)
+                )
+                analysis['v4_data']['entry_gate'] = gate_details
+                if not gate_ok:
+                    print(f"   ❌ Rejected by V4 entry gate: {', '.join(gate_reasons)}")
+                    continue
+                edge = gate_details['expectancy']['expected_net_pct']
+                direction = gate_details['direction']
+                analysis['reasons'].append(
+                    f"✓ V4 entry gate: {direction}, est net edge {edge:+.2f}%"
+                )
                 
                 # Check correlation
                 can_open, max_corr = CorrelationManager.check_position_correlation(

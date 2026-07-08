@@ -1,7 +1,7 @@
 name: Kraken Trading Bot V4
 
-# Automatic schedule paused. The AI Strategy Router workflow is now the single
-# scheduled live controller and may choose this old V4 strategy.
+# Automatic schedule paused. The ML V2 live trader (ml-live-trade.yml) is now the
+# single scheduled live controller. This old V4 bot is manual-only.
 on:
   # schedule:
   #   - cron: '*/15 * * * *'
@@ -126,6 +126,18 @@ jobs:
 
         USE_ML_VALIDATION: 'true'
         ML_CONFIDENCE_THRESHOLD: '0.6'
+        V4_ALLOWED_SYMBOLS: 'BTC-USD,ETH-USD'
+        V4_ALLOWED_DIRECTIONS: 'short'
+        V4_MIN_CONFIDENCE: '0.80'
+        V4_MAX_SIGNAL_AGE_HOURS: '12'
+        V4_TREND_EMA: '200'
+        V4_MIN_EXPECTANCY_PCT: '0.25'
+        V4_EXPECTED_HOLD_HOURS: '12'
+        V4_MAKER_ENTRY_FEE: '0.0040'
+        V4_TAKER_EXIT_FEE: '0.0080'
+        V4_MARGIN_OPEN_FEE: '0.0004'
+        V4_ROLLOVER_FEE_4H: '0.0004'
+        V4_SPREAD_SLIPPAGE_BUFFER: '0.0015'
 
         DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
 

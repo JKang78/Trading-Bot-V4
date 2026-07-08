@@ -190,6 +190,11 @@ def simulate_symbol(
     base_tp: float,
     base_trail: float,
     fee_rate: float,
+    exit_fee_rate: float,
+    margin_open_fee: float,
+    rollover_fee_4h: float,
+    bars_per_rollover: int,
+    spread_slippage_buffer: float,
     use_regime: bool,
     warmup: int,
     risk_fraction: float,
@@ -200,6 +205,11 @@ def simulate_symbol(
     atr_tp_mult: float = 3.0,
     atr_trail_mult: float = 2.0,
     trend_ema: int = 0,
+    allowed_directions: Optional[set] = None,
+    min_confidence: float = 0.0,
+    max_signal_age_hours: Optional[float] = None,
+    min_expectancy_pct: Optional[float] = None,
+    expected_hold_bars: int = 12,
     use_ensemble: bool = False,
     ensemble_consensus: float = 0.6,
     ensemble_confidence: float = 0.6,
@@ -226,10 +236,6 @@ def simulate_symbol(
     result = BacktestResult(symbol=symbol)
     equity = starting_equity
     result.equity_curve.append(equity)
-
-    # Fee cost, expressed as a % of the margin. Fees hit both entry and exit,
-    # and apply to the leveraged notional, so leverage multiplies the fee too.
-    fee_cost_pct = fee_rate * 100 * leverage * 2
 
     # Precompute ATR once over the whole series (each entry reads its own bar).
     atr_series = compute_atr(data, atr_period) if exit_mode == 'atr' else None
@@ -264,12 +270,61 @@ def simulate_symbol(
             continue
 
         direction = 'long' if signal == 'BUY' else 'short'
+        if allowed_directions and direction not in allowed_directions:
+            i += 1
+            result.equity_curve.append(equity)
+            continue
+
+        if _conf < min_confidence:
+            i += 1
+            result.equity_curve.append(equity)
+            continue
+
+        if max_signal_age_hours is not None:
+            points = detector.int_lows.dropna() if signal == 'BUY' else detector.int_highs.dropna()
+            if points.empty:
+                i += 1
+                result.equity_curve.append(equity)
+                continue
+            signal_time = pd.Timestamp(points.index[-1])
+            age_hours = (pd.Timestamp(window.index[-1]) - signal_time).total_seconds() / 3600
+            if age_hours > max_signal_age_hours:
+                i += 1
+                result.equity_curve.append(equity)
+                continue
 
         # Optional higher-timeframe trend filter: skip counter-trend entries.
         if not passes_trend_filter(window, direction, trend_ema):
             i += 1
             result.equity_curve.append(equity)
             continue
+
+        if min_expectancy_pct is not None:
+            if use_regime:
+                edge_regime = RegimeDetector.detect(window, config.REGIME_LOOKBACK)
+                edge_params = RegimeDetector.get_adapted_params(edge_regime, base_sl, base_tp, base_trail)
+                edge_sl = float(edge_params['stop_loss'])
+                edge_tp = float(edge_params['take_profit'])
+            else:
+                edge_sl, edge_tp = base_sl, base_tp
+            expected_rollovers = max(0, expected_hold_bars // max(1, bars_per_rollover))
+            estimated_cost_pct = (
+                fee_rate
+                + exit_fee_rate
+                + margin_open_fee
+                + expected_rollovers * rollover_fee_4h
+                + spread_slippage_buffer
+            ) * 100 * leverage
+            win_probability = max(0.0, min(0.99, float(_conf)))
+            expected_net_pct = (
+                win_probability * edge_tp
+                - (1.0 - win_probability) * edge_sl
+                - estimated_cost_pct
+            )
+            if expected_net_pct < min_expectancy_pct:
+                i += 1
+                result.equity_curve.append(equity)
+                continue
 
         # Optional ensemble filter: the 4-strategy vote must confirm the swing
         # direction AND clear the consensus/confidence thresholds. This is the
@@ -375,6 +430,21 @@ def simulate_symbol(
             gross_pnl_pct = ((exit_price - entry_price) / entry_price) * 100 * leverage
         else:
             gross_pnl_pct = ((entry_price - exit_price) / entry_price) * 100 * leverage
+        bars_held = exit_index - i
+        rollovers = (
+            max(0, bars_held // max(1, bars_per_rollover))
+            if rollover_fee_4h > 0
+            else 0
+        )
+        # Fees are charged on notional. Expressed as % of margin, leverage
+        # multiplies trading, opening, and rollover fee fractions.
+        fee_cost_pct = (
+            fee_rate
+            + exit_fee_rate
+            + margin_open_fee
+            + rollovers * rollover_fee_4h
+            + spread_slippage_buffer
+        ) * 100 * leverage
         net_pnl_pct = gross_pnl_pct - fee_cost_pct
 
         # Update the equity curve. We only put `risk_fraction` of equity at risk
@@ -393,7 +463,7 @@ def simulate_symbol(
             gross_pnl_pct=gross_pnl_pct,
             net_pnl_pct=net_pnl_pct,
             exit_reason=exit_reason,
-            bars_held=exit_index - i,
+            bars_held=bars_held,
         ))
         result.equity_curve.append(equity)
 
@@ -408,7 +478,7 @@ def print_report(results: List[BacktestResult], fee_rate: float, leverage: float
     print("\n" + "=" * 70)
     print("BACKTEST RESULTS")
     print("=" * 70)
-    print(f"Leverage: {leverage}x   |   Fee per side: {fee_rate * 100:.3f}%")
+    print(f"Leverage: {leverage}x   |   Entry fee: {fee_rate * 100:.3f}%")
 
     all_trades: List[Trade] = []
     for r in results:
@@ -496,7 +566,17 @@ def main() -> None:
     parser.add_argument('--take-profit', type=float, default=config.BASE_TAKE_PROFIT)
     parser.add_argument('--trailing', type=float, default=config.BASE_TRAILING_STOP)
     parser.add_argument('--fee', type=float, default=0.0026,
-                        help="Fee per side as a fraction (Kraken taker ~0.0026 = 0.26%%).")
+                        help="Entry fee as a fraction. Also used for exit unless --exit-fee is set.")
+    parser.add_argument('--exit-fee', type=float, default=None,
+                        help="Exit fee as a fraction. Defaults to --fee.")
+    parser.add_argument('--margin-open-fee', type=float, default=0.0,
+                        help="Margin opening fee as a fraction of notional.")
+    parser.add_argument('--rollover-fee-4h', type=float, default=0.0,
+                        help="Margin rollover fee charged every 4 hours as a fraction of notional.")
+    parser.add_argument('--bars-per-rollover', type=int, default=4,
+                        help="Bars per rollover fee. For 1h candles, Kraken's 4h rollover = 4.")
+    parser.add_argument('--spread-slippage-buffer', type=float, default=0.0,
+                        help="Extra round-trip spread/slippage buffer as a fraction of notional.")
     parser.add_argument('--no-regime', action='store_true',
                         help="Disable regime-based SL/TP/trailing multipliers.")
     parser.add_argument('--exit-mode', choices=['percent', 'atr'], default='percent',
@@ -512,6 +592,16 @@ def main() -> None:
     parser.add_argument('--trend-ema', type=int, default=0,
                         help="Trend filter EMA period (e.g. 200). 0 = off. "
                              "Longs only above the EMA, shorts only below.")
+    parser.add_argument('--directions', default='long,short',
+                        help="Comma-separated directions to test: long, short, long,short, or all.")
+    parser.add_argument('--min-confidence', type=float, default=0.0,
+                        help="Reject entries below this swing/ensemble confidence.")
+    parser.add_argument('--max-signal-age-hours', type=float, default=None,
+                        help="Reject stale swing signals older than this many hours.")
+    parser.add_argument('--min-expectancy-pct', type=float, default=None,
+                        help="Reject entries whose estimated after-cost expectancy is below this PnL%%.")
+    parser.add_argument('--expected-hold-bars', type=int, default=12,
+                        help="Expected hold length used only by the expectancy gate.")
     parser.add_argument('--use-ensemble', action='store_true',
                         help="Require the 4-strategy ensemble to confirm each entry.")
     parser.add_argument('--ensemble-consensus', type=float, default=config.MIN_ENSEMBLE_CONSENSUS)
@@ -521,6 +611,18 @@ def main() -> None:
     parser.add_argument('--out', default='backtest_trades.csv',
                         help="Where to save the per-trade CSV log.")
     args = parser.parse_args()
+
+    allowed_directions = {
+        direction.strip().lower()
+        for direction in args.directions.split(',')
+        if direction.strip()
+    }
+    if 'all' in allowed_directions:
+        allowed_directions = {'long', 'short'}
+    allowed_directions = allowed_directions & {'long', 'short'}
+    if not allowed_directions:
+        raise SystemExit("--directions must include long, short, or all")
+    exit_fee = args.fee if args.exit_fee is None else args.exit_fee
 
     if args.symbols:
         symbols = [s.strip() for s in args.symbols.split(',') if s.strip()]
@@ -532,6 +634,17 @@ def main() -> None:
 
     print(f"Backtesting {len(symbols)} symbol(s): {', '.join(symbols)}")
     print(f"Period={args.period}  Interval={args.interval}  Leverage={args.leverage}x")
+    print(f"Directions={','.join(sorted(allowed_directions))}")
+    if args.margin_open_fee or args.rollover_fee_4h:
+        print(f"Margin fees: open={args.margin_open_fee * 100:.3f}%  "
+              f"rollover_4h={args.rollover_fee_4h * 100:.3f}%")
+    if exit_fee != args.fee or args.spread_slippage_buffer:
+        print(f"Exit fee={exit_fee * 100:.3f}%  "
+              f"spread/slippage={args.spread_slippage_buffer * 100:.3f}%")
+    if args.min_confidence or args.max_signal_age_hours is not None or args.min_expectancy_pct is not None:
+        print(f"Entry gates: confidence>={args.min_confidence:.2f}  "
+              f"age<={args.max_signal_age_hours if args.max_signal_age_hours is not None else 'OFF'}h  "
+              f"expectancy>={args.min_expectancy_pct if args.min_expectancy_pct is not None else 'OFF'}%")
     if args.exit_mode == 'atr':
         print(f"Exit=ATR  period={args.atr_period}  SL={args.atr_sl_mult}xATR  "
               f"TP={args.atr_tp_mult}xATR  Trail={args.atr_trail_mult}xATR")
@@ -563,6 +676,11 @@ def main() -> None:
             base_tp=args.take_profit,
             base_trail=args.trailing,
             fee_rate=args.fee,
+            exit_fee_rate=exit_fee,
+            margin_open_fee=args.margin_open_fee,
+            rollover_fee_4h=args.rollover_fee_4h,
+            bars_per_rollover=args.bars_per_rollover,
+            spread_slippage_buffer=args.spread_slippage_buffer,
             use_regime=not args.no_regime,
             warmup=args.warmup,
             risk_fraction=allocations.get(symbol, 1.0),
@@ -573,6 +691,11 @@ def main() -> None:
             atr_tp_mult=args.atr_tp_mult,
             atr_trail_mult=args.atr_trail_mult,
             trend_ema=args.trend_ema,
+            allowed_directions=allowed_directions,
+            min_confidence=args.min_confidence,
+            max_signal_age_hours=args.max_signal_age_hours,
+            min_expectancy_pct=args.min_expectancy_pct,
+            expected_hold_bars=args.expected_hold_bars,
             use_ensemble=args.use_ensemble,
             ensemble_consensus=args.ensemble_consensus,
             ensemble_confidence=args.ensemble_confidence,

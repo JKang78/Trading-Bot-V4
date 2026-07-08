@@ -1,14 +1,14 @@
 name: ML Strategy LIVE Trading (real money)
 
 # ⚠️ THIS PLACES REAL ORDERS ON KRAKEN via ml_live_trade.py.
-# Default: V2 (more trades, higher compounding in backtests).
-# Switch to V3: set ML_LIVE_STRATEGY=v3 in env below.
-# Automatic schedule paused while the faster old V4 swing bot is being tested.
-# Run manually from GitHub Actions if needed.
+# This is now the ONLY scheduled live trading controller. It runs the ML V2
+# strategy (the most profitable profile in our backtests) with real money.
+# The AI strategy router has been removed.
+# Run manually with dry_run=true from GitHub Actions to test safely.
 
 on:
-  # schedule:
-  #   - cron: '0 * * * *'   # hourly (data is 1h; holds are ~3 days)
+  schedule:
+    - cron: '0 * * * *'   # hourly (data is 1h; holds are ~3 days)
   workflow_dispatch:
     inputs:
       dry_run:

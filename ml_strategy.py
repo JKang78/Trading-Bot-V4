@@ -4,13 +4,13 @@ SHARED ML STRATEGY (single source of truth for backtest + live)
 Two saved profiles — switch with ML_LIVE_STRATEGY=v2 or v3 (live/paper)
 or ml_strategy_backtest.py --v3 for backtests.
 
-V2 (default live): more trades, higher total compounding in backtests.
-  h=72, thr=0.68, F&G features + filter, adaptive exit at 0.40.
+V2 (default live): more trades, tuned for better temporal robustness.
+  h=72, thr=0.70, F&G features + filter, adaptive exit at 0.40.
   Revalidate with ml_strategy_backtest.py --live-profile v2 before promotion.
 
-V3 (opt-in): fewer trades, higher per-trade edge, cost-aware labels.
-  h=72, thr=0.70, cost-aware labels, EV-gated market entries, confidence sizing.
-  Disabled in the scheduled router until a fresh walk-forward is positive.
+V3: fewer trades, higher per-trade edge, cost-aware labels.
+  h=72, thr=0.70, cost-aware labels, EV-filtered entries,
+  EV-gated market entries, confidence sizing.
 """
 
 from dataclasses import dataclass, field
@@ -111,7 +111,7 @@ class StrategyProfile:
 V2_PROFILE = StrategyProfile(
     version='v2',
     horizon=72,
-    buy_thr=0.68,
+    buy_thr=0.70,
     exit_thr=0.40,
     use_cost_aware_labels=False,
     use_fng_features=True,
@@ -140,6 +140,7 @@ V3_PROFILE = StrategyProfile(
     use_ev_exit=True,
     ev_gated_market_fallback=True,
     use_confidence_sizing=True,
+    use_expected_value_filter=True,
 )
 
 

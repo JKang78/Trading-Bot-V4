@@ -208,8 +208,10 @@ class SentimentAnalyzer:
             sentiment_scores = []
 
             for item in news_items[:20]:  # Latest 20 news items
-                title = item.get('title', '').lower()
-                body = item.get('body', '').lower()
+                # Use `or ''` because the API can return the key with a null
+                # value, and None has no .lower() method.
+                title = (item.get('title') or '').lower()
+                body = (item.get('body') or '').lower()
                 text = title + ' ' + body
 
                 score = self._calculate_text_sentiment(text)
@@ -266,10 +268,12 @@ class SentimentAnalyzer:
             sentiment_scores = []
 
             for item in news_items:
-                # Combine title and description
-                title = item.get('title', '').lower()
-                description = item.get('description', '').lower()
-                content = item.get('content', '').lower() if item.get('content') else ''
+                # Combine title and description. Use `or ''` because NewsData.io
+                # can return these keys with a null value, and None has no
+                # .lower() method (this was the 'NoneType' crash).
+                title = (item.get('title') or '').lower()
+                description = (item.get('description') or '').lower()
+                content = (item.get('content') or '').lower()
 
                 text = f"{title} {description} {content}"
 

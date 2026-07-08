@@ -6,40 +6,36 @@ Important: this can place real margin orders on Kraken. Use dry-run when testing
 
 ## What Is Live
 
-### AI Strategy Router
+### ML V2 Live Trader
 
-File: `strategy_router.py`
+File: `ml_live_trade.py`
 
-Workflow: `.github/workflows/strategy-router.yml`
+Workflow: `.github/workflows/ml-live-trade.yml`
 
-Runs every 15 minutes in live mode. It checks signals from:
+Runs every hour in live mode with real money. This is the only scheduled
+trading controller. It trades the ML V2 strategy, which was the most profitable
+profile in our backtests.
 
-- old V4 swing bot
-- ML V2 strategy
+Coins: `XRP-USD, ADA-USD, SOL-USD, LINK-USD, DOGE-USD` (each passed
+walk-forward validation with positive after-cost expectancy).
 
-ML V3 is intentionally disabled in the scheduled router until a fresh
-walk-forward backtest is positive.
+How it trades:
 
-If there are valid candidates, OpenAI chooses:
+- Long-only by default (the backtested short side barely covered its costs).
+- Each trade uses 20% of usable margin at 2x leverage.
+- Hold ~3 days (72 x 1h bars), then close on a time-based exit.
+- At most one position per coin, up to 5 open positions.
+- Entries try a post-only maker limit order first, then fall back to a market
+  order only if the expected value still survives taker fees and slippage.
+- Exits are always market orders (a time-boxed strategy must be able to get out).
 
-- which strategy to use
-- which symbol to trade
-- how much budget each bot version should get
-- leverage
+State (which positions we opened and when to close them) is saved to
+`ml_live_state.json` and cached between runs so it survives independent cron runs.
 
-The router uses `gpt-5.5` by default because this is a live-money decision layer. The smaller mini model is cheaper, but the router only calls OpenAI when there is a real candidate to evaluate.
+Fresh V2/V3 research is captured by `research_v2_v3_profitability.py`.
 
-The code still enforces hard safety limits before any order:
-
-- max 1 open position
-- max 25% free margin per trade
-- max 35% total margin exposure
-- max 2x leverage
-- no new entries if there is already an open position or open order
-
-Every run appends a shadow record to `router_decisions.jsonl` with the
-candidates, AI decision, deterministic highest-score benchmark, selected trade,
-validation notes, and execution status.
+To test safely, run the workflow manually with `dry_run=true` — it runs the full
+logic without placing real orders.
 
 ### Daily Telegram Portfolio Report
 
@@ -53,8 +49,7 @@ Runs every day at 09:00 Asia/Seoul and sends a Telegram portfolio update.
 
 These are not scheduled automatically:
 
-- `.github/workflows/trading-bot-v4.yml`
-- `.github/workflows/ml-live-trade.yml`
+- `.github/workflows/trading-bot-v4.yml` (old V4 swing bot)
 - paper-trading workflows
 
 Use them manually only when needed.
@@ -72,7 +67,6 @@ KRAKEN_API_KEY
 KRAKEN_API_SECRET
 TELEGRAM_BOT_TOKEN
 TELEGRAM_CHAT_ID
-OPENAI_API_KEY
 ```
 
 Optional:
@@ -86,24 +80,24 @@ Do not commit real keys to the repo.
 
 ## Common Commands
 
-Run the scheduled AI router manually in live mode:
+Run the ML V2 live trader manually in live mode (real money):
 
 ```bash
-gh workflow run strategy-router.yml \
+gh workflow run ml-live-trade.yml \
   --repo JKang78/Trading-Bot-V4 \
   --ref main \
   -f dry_run=false \
-  -f ai_enabled=true
+  -f strategy=v2
 ```
 
-Run the AI router safely in GitHub dry-run mode:
+Run the ML V2 live trader safely in GitHub dry-run mode (no real orders):
 
 ```bash
-gh workflow run strategy-router.yml \
+gh workflow run ml-live-trade.yml \
   --repo JKang78/Trading-Bot-V4 \
   --ref main \
   -f dry_run=true \
-  -f ai_enabled=true
+  -f strategy=v2
 ```
 
 Run the daily portfolio report manually:
@@ -119,7 +113,7 @@ Run locally in dry-run mode:
 ```bash
 python3 -m venv venv
 venv/bin/pip install -r requirements.txt
-ROUTER_DRY_RUN=true venv/bin/python strategy_router.py
+ML_LIVE_DRY_RUN=true venv/bin/python ml_live_trade.py
 ```
 
 Run the standard ML V2 validation backtest that matches the live profile:
@@ -131,13 +125,40 @@ venv/bin/python ml_strategy_backtest.py \
   --out ml_strategy_trades_live_v2.csv
 ```
 
+Run the V2/V3 fee-sensitivity research sweep:
+
+```bash
+venv/bin/python research_v2_v3_profitability.py
+```
+
+Research the old V4 bear-market short profile with margin fees included:
+
+```bash
+venv/bin/python backtest.py \
+  --symbols BTC-USD,ETH-USD \
+  --period 720d \
+  --interval 1h \
+  --leverage 2 \
+  --directions short \
+  --trend-ema 200 \
+  --fee 0.0040 \
+  --exit-fee 0.0080 \
+  --margin-open-fee 0.0004 \
+  --rollover-fee-4h 0.0004 \
+  --spread-slippage-buffer 0.0015 \
+  --min-confidence 0.80 \
+  --max-signal-age-hours 12 \
+  --min-expectancy-pct 0.25 \
+  --out v4_short_bear_research.csv
+```
+
 ## Main Files
 
 ```text
-strategy_router.py              AI strategy and budget router
-kraken_bot_v4_advanced.py       old V4 swing bot
-ml_live_trade.py                ML live trader
+ml_live_trade.py                ML V2 live trader (scheduled, real money)
 ml_strategy.py                  ML V2/V3 strategy logic
+kraken_bot_v4_advanced.py       old V4 swing bot (manual only)
+research_v2_v3_profitability.py V2/V3 walk-forward fee-sensitivity research
 daily_portfolio_report.py       Telegram portfolio report
 .github/workflows/              GitHub schedules and manual workflows
 .env.example                    local environment template
@@ -148,8 +169,6 @@ daily_portfolio_report.py       Telegram portfolio report
 These files are generated and should not be committed:
 
 ```text
-strategy_router_state.json
-router_decisions.jsonl
 ml_live_state.json
 v4_position_state.json
 rl_state.json
@@ -160,7 +179,7 @@ rl_state.json
 
 GitHub Actions is the scheduled runtime.
 
-The AI router is the only scheduled trading controller and is currently
-scheduled as live by default. The old V4 bot and ML bot can still be run
-manually, but their automatic schedules are paused to avoid two bots trading the
-same Kraken account at the same time.
+The ML V2 live trader (`ml-live-trade.yml`) is the only scheduled trading
+controller and runs hourly as live by default. The old V4 bot and paper-trading
+workflows can still be run manually, but their automatic schedules are paused to
+avoid two bots trading the same Kraken account at the same time.
