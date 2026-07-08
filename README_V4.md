@@ -925,6 +925,28 @@ schedule:
 
 ---
 
+## 📬 Daily Portfolio Telegram Report
+
+`daily_portfolio_report.py` sends a read-only account summary to Telegram:
+
+```bash
+python daily_portfolio_report.py
+```
+
+It reads Kraken balances, trade balance, open positions, open orders, the ML live state file, and tracked market prices. It does not place or cancel orders.
+
+The scheduled workflow `.github/workflows/daily-portfolio-report.yml` runs every day at `00:00 UTC` (`09:00 Asia/Seoul`) and keeps account details out of Actions logs by default.
+
+Useful settings:
+
+```bash
+PORTFOLIO_REPORT_TIMEZONE=Asia/Seoul
+PORTFOLIO_REPORT_SYMBOLS=BTC-USD,ETH-USD,XRP-USD,ADA-USD,SOL-USD,LINK-USD,DOGE-USD
+PORTFOLIO_REPORT_PRINT_STDOUT=false
+```
+
+---
+
 ## ✅ Final Checklist
 
 Before pushing:

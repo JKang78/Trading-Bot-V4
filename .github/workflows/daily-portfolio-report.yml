@@ -1,0 +1,56 @@
+name: Daily Portfolio Telegram Report
+
+on:
+  schedule:
+    # 00:00 UTC = 09:00 Asia/Seoul.
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: daily-portfolio-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Restore ML live state
+      continue-on-error: true
+      uses: actions/cache/restore@v4
+      with:
+        path: ml_live_state.json
+        key: portfolio-report-state-${{ github.run_number }}
+        restore-keys: |
+          ml-live-state-
+
+    - name: Send daily portfolio report
+      env:
+        KRAKEN_API_KEY: ${{ secrets.KRAKEN_API_KEY }}
+        KRAKEN_API_SECRET: ${{ secrets.KRAKEN_API_SECRET }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        ML_LIVE_STATE_FILE: 'ml_live_state.json'
+        PORTFOLIO_REPORT_TIMEZONE: 'Asia/Seoul'
+        PORTFOLIO_REPORT_SYMBOLS: 'BTC-USD,ETH-USD,XRP-USD,ADA-USD,SOL-USD,LINK-USD,DOGE-USD'
+        PORTFOLIO_REPORT_SEND_TELEGRAM: 'true'
+        PORTFOLIO_REPORT_PRINT_STDOUT: 'false'
+      run: |
+        echo "Sending daily portfolio Telegram report"
+        echo "Date: $(date)"
+        python daily_portfolio_report.py
