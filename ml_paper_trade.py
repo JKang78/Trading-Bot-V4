@@ -1,5 +1,5 @@
 """
-LIVE PAPER-TRADING RUNNER for the longer-horizon ML V3 strategy.
+LIVE PAPER-TRADING RUNNER for the longer-horizon ML V2 strategy.
 
 Why a separate runner (not the main bot's DRY_RUN)?
 ---------------------------------------------------
@@ -42,12 +42,12 @@ from ml_strategy import (
 # ─────────────────────────── Settings (env-overridable) ───────────────────────────
 STATE_FILE = os.getenv('ML_PAPER_STATE_FILE', 'ml_paper_state.json')
 SYMBOLS = [s.strip() for s in os.getenv(
-    'ML_PAPER_SYMBOLS', 'XRP-USD,ADA-USD,SOL-USD,BTC-USD,ETH-USD').split(',') if s.strip()]
+    'ML_PAPER_SYMBOLS', 'XRP-USD,ADA-USD,SOL-USD,LINK-USD,DOGE-USD').split(',') if s.strip()]
 PERIOD = os.getenv('ML_PAPER_PERIOD', '720d')     # history for training
 INTERVAL = os.getenv('ML_PAPER_INTERVAL', '1h')
 HORIZON = int(os.getenv('ML_PAPER_HORIZON', '72'))
-BUY_THR = float(os.getenv('ML_PAPER_BUY_THR', '0.70'))
-SELL_THR = float(os.getenv('ML_PAPER_SELL_THR', '0.35'))
+BUY_THR = float(os.getenv('ML_PAPER_BUY_THR', '0.68'))
+SELL_THR = float(os.getenv('ML_PAPER_SELL_THR', '0'))
 EXIT_THR = float(os.getenv('ML_PAPER_EXIT_THR', '0.40'))
 USE_FNG_FEATURES = os.getenv('ML_PAPER_FNG_FEATURES', 'true').lower() == 'true'
 USE_FNG_FILTER = os.getenv('ML_PAPER_FNG_FILTER', 'true').lower() == 'true'
@@ -59,11 +59,11 @@ MAX_OPEN = int(os.getenv('ML_PAPER_MAX_OPEN', '3'))
 MAKER_ENTRY_FEE = float(os.getenv('ML_PAPER_MAKER_ENTRY_FEE', '0.0023'))
 TAKER_ENTRY_FEE = float(os.getenv('ML_PAPER_TAKER_ENTRY_FEE', '0.0040'))
 TAKER_EXIT_FEE = float(os.getenv('ML_PAPER_TAKER_EXIT_FEE', '0.0040'))
-MARGIN_OPEN_FEE = float(os.getenv('ML_PAPER_MARGIN_OPEN_FEE', '0.0004'))
-ROLLOVER_FEE_4H = float(os.getenv('ML_PAPER_ROLLOVER_FEE_4H', '0.0004'))
+MARGIN_OPEN_FEE = float(os.getenv('ML_PAPER_MARGIN_OPEN_FEE', '0.0002'))
+ROLLOVER_FEE_4H = float(os.getenv('ML_PAPER_ROLLOVER_FEE_4H', '0.0002'))
 SPREAD_BUFFER = float(os.getenv('ML_PAPER_SPREAD_BUFFER', '0.0005'))
 SLIPPAGE_BUFFER = float(os.getenv('ML_PAPER_SLIPPAGE_BUFFER', '0.0010'))
-MINIMUM_EDGE = float(os.getenv('ML_PAPER_MINIMUM_EDGE', '0.0075'))
+MINIMUM_EDGE = float(os.getenv('ML_PAPER_MINIMUM_EDGE', '0'))
 EV_COST_MULTIPLIER = float(os.getenv('ML_PAPER_EV_COST_MULTIPLIER', '1.5'))
 USE_BTC_FEATURES = os.getenv('ML_PAPER_BTC_FEATURES', 'false').lower() == 'true'
 USE_BTC_REGIME_FILTER = os.getenv('ML_PAPER_BTC_REGIME_FILTER', 'false').lower() == 'true'
@@ -244,7 +244,7 @@ def main() -> None:
             'relative_strength_7d': round(sig.relative_strength_7d, 5),
             'margin_usd': margin_usd,
             'leverage': LEVERAGE,
-            'model_version': 'v3_cost_aware_ev_btc_rs',
+            'model_version': 'v2',
         }
         actions.append(
             f"OPEN {symbol} {'LONG' if sig.signal == 'BUY' else 'SHORT'} "
