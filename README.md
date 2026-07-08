@@ -25,6 +25,8 @@ If there are valid candidates, OpenAI chooses:
 - how much budget each bot version should get
 - leverage
 
+The router uses `gpt-5.5` by default because this is a live-money decision layer. The smaller mini model is cheaper, but the router only calls OpenAI when there is a real candidate to evaluate.
+
 The code still enforces hard safety limits before any order:
 
 - max 1 open position
