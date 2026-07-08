@@ -44,6 +44,7 @@ jobs:
       with:
         path: |
           strategy_router_state.json
+          router_decisions.jsonl
           ml_live_state.json
           v4_position_state.json
         key: router-state-${{ github.run_number }}
@@ -64,12 +65,13 @@ jobs:
         ROUTER_AI_ENABLED: ${{ github.event.inputs.ai_enabled || 'true' }}
         OPENAI_ROUTER_MODEL: 'gpt-5.5'
         OPENAI_ROUTER_REASONING_EFFORT: 'medium'
+        ROUTER_DECISION_LOG_FILE: 'router_decisions.jsonl'
         ROUTER_MAX_OPEN_POSITIONS: '1'
         ROUTER_MAX_TRADE_MARGIN_FRACTION: '0.25'
         ROUTER_MAX_TOTAL_MARGIN_FRACTION: '0.35'
         ROUTER_MIN_TRADE_MARGIN_USD: '1.0'
         ROUTER_MAX_LEVERAGE: '2'
-        ROUTER_ML_STRATEGIES: 'v2,v3'
+        ROUTER_ML_STRATEGIES: 'v2'
         ROUTER_ML_SYMBOLS: 'XRP-USD,ADA-USD,SOL-USD,LINK-USD,DOGE-USD'
         ROUTER_NOTIFY_NO_TRADE: 'false'
 
@@ -106,6 +108,7 @@ jobs:
       with:
         path: |
           strategy_router_state.json
+          router_decisions.jsonl
           ml_live_state.json
           v4_position_state.json
         key: router-state-${{ github.run_number }}
@@ -117,6 +120,7 @@ jobs:
         name: router-state-${{ github.run_number }}
         path: |
           strategy_router_state.json
+          router_decisions.jsonl
           ml_live_state.json
           v4_position_state.json
         retention-days: 30

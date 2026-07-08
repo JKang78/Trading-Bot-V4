@@ -62,7 +62,8 @@ def env_bool(name: str, default: bool) -> bool:
 
 ROUTER_STATE_FILE = env_str("ROUTER_STATE_FILE", "strategy_router_state.json")
 ML_STATE_FILE = env_str("ML_LIVE_STATE_FILE", "ml_live_state.json")
-DRY_RUN = env_bool("ROUTER_DRY_RUN", False)
+ROUTER_DECISION_LOG_FILE = env_str("ROUTER_DECISION_LOG_FILE", "router_decisions.jsonl")
+DRY_RUN = env_bool("ROUTER_DRY_RUN", True)
 AI_ENABLED = env_bool("ROUTER_AI_ENABLED", True)
 OPENAI_MODEL = env_str("OPENAI_ROUTER_MODEL", "gpt-5.5")
 OPENAI_TIMEOUT = env_int("OPENAI_ROUTER_TIMEOUT", 30)
@@ -79,7 +80,7 @@ DEFAULT_LEVERAGE = env_int("ROUTER_DEFAULT_LEVERAGE", 2)
 
 ML_STRATEGY_VERSIONS = [
     version.strip().lower()
-    for version in env_str("ROUTER_ML_STRATEGIES", env_str("ROUTER_ML_STRATEGY", env_str("ML_LIVE_STRATEGY", "v2,v3"))).split(",")
+    for version in env_str("ROUTER_ML_STRATEGIES", env_str("ROUTER_ML_STRATEGY", env_str("ML_LIVE_STRATEGY", "v2"))).split(",")
     if version.strip()
 ]
 if not ML_STRATEGY_VERSIONS:
@@ -121,6 +122,89 @@ def load_json(path: str, default: dict) -> dict:
 def save_json(path: str, data: dict) -> None:
     data["updated_at"] = pd.Timestamp.utcnow().isoformat()
     Path(path).write_text(json.dumps(data, indent=2, default=str))
+
+
+def append_jsonl(path: str, event: dict) -> None:
+    event = {"logged_at": pd.Timestamp.utcnow().isoformat(), **event}
+    file_path = Path(path)
+    try:
+        if file_path.parent != Path("."):
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+        with file_path.open("a") as f:
+            f.write(json.dumps(event, default=str, separators=(",", ":")) + "\n")
+    except Exception as exc:
+        print(f"Could not append router log {path}: {exc}")
+
+
+def active_config_snapshot(config: Config) -> dict:
+    return {
+        "router": {
+            "dry_run": DRY_RUN,
+            "ai_enabled": AI_ENABLED,
+            "openai_model": OPENAI_MODEL,
+            "ml_strategies": ML_STRATEGY_VERSIONS,
+            "ml_symbols": ML_SYMBOLS,
+            "data_period": DATA_PERIOD,
+            "data_interval": DATA_INTERVAL,
+            "max_open_positions": MAX_OPEN_POSITIONS,
+            "max_trade_margin_fraction": MAX_TRADE_MARGIN_FRACTION,
+            "max_total_margin_fraction": MAX_TOTAL_MARGIN_FRACTION,
+            "default_budget_fraction": DEFAULT_BUDGET_FRACTION,
+            "max_leverage": MAX_LEVERAGE,
+            "default_leverage": DEFAULT_LEVERAGE,
+            "decision_log_file": ROUTER_DECISION_LOG_FILE,
+        },
+        "v4_candidate": {
+            "use_sentiment": config.USE_SENTIMENT_ANALYSIS,
+            "use_onchain": config.USE_ONCHAIN_ANALYSIS,
+            "use_ensemble": config.USE_ENSEMBLE_SYSTEM,
+            "use_rl_position_sizing": config.USE_RL_POSITION_SIZING,
+            "use_ml_validation": config.USE_ML_VALIDATION,
+            "ml_confidence_threshold": config.ML_CONFIDENCE_THRESHOLD,
+            "leverage": config.LEVERAGE,
+            "stop_loss_pct": config.BASE_STOP_LOSS,
+            "take_profit_pct": config.BASE_TAKE_PROFIT,
+            "trailing_stop_pct": config.BASE_TRAILING_STOP,
+        },
+    }
+
+
+def print_active_config(config: Config) -> None:
+    snapshot = active_config_snapshot(config)
+    print("Active config:")
+    for section, values in snapshot.items():
+        rendered = ", ".join(f"{key}={value}" for key, value in values.items())
+        print(f"  {section}: {rendered}")
+
+
+def log_router_decision(
+    candidates: list[Candidate],
+    account_context: dict,
+    market_context: dict,
+    actual_decision: dict,
+    deterministic_decision: dict,
+    selected: Optional[Candidate],
+    margin_usd: float,
+    leverage: int,
+    validation_notes: list[str],
+    execution: dict,
+) -> None:
+    append_jsonl(ROUTER_DECISION_LOG_FILE, {
+        "event": "router_decision",
+        "dry_run": DRY_RUN,
+        "ai_enabled": AI_ENABLED,
+        "account": account_context,
+        "market": market_context,
+        "candidates": [candidate_for_prompt(candidate) for candidate in candidates],
+        "ai_decision": actual_decision if AI_ENABLED else None,
+        "deterministic_decision": deterministic_decision,
+        "actual_decision": actual_decision,
+        "selected": candidate_for_prompt(selected) if selected else None,
+        "margin_usd": margin_usd,
+        "leverage": leverage,
+        "validation_notes": validation_notes,
+        "execution": execution,
+    })
 
 
 def pair_map(config: Config) -> dict:
@@ -182,6 +266,22 @@ def manage_open_positions(
         current_price = float(df["Close"].iloc[-1])
         if not time_due:
             continue
+        simulated_position = bool(pos.get("dry_run")) or pos.get("entry_fill") == "dry-run"
+        if DRY_RUN and not simulated_position:
+            actions.append(f"Dry-run would close ML {symbol} {pos['direction']} @ {current_price:.4f}; live state kept")
+            append_jsonl(ROUTER_DECISION_LOG_FILE, {
+                "event": "position_close_signal",
+                "strategy": f"ml_{pos.get('model_version', 'unknown')}",
+                "symbol": symbol,
+                "direction": pos["direction"],
+                "entry_price": pos["entry_price"],
+                "would_exit_price": current_price,
+                "exit_reason": "router_time",
+                "entry_time": pos.get("entry_time"),
+                "signal_time": str(now),
+                "dry_run": DRY_RUN,
+            })
+            continue
 
         try:
             if not DRY_RUN:
@@ -206,6 +306,19 @@ def manage_open_positions(
             })
             del ml_state["open"][symbol]
             actions.append(f"Closed ML {symbol} {pos['direction']} @ {current_price:.4f} ({pnl_pct:+.2f}%)")
+            append_jsonl(ROUTER_DECISION_LOG_FILE, {
+                "event": "position_closed",
+                "strategy": f"ml_{pos.get('model_version', 'unknown')}",
+                "symbol": symbol,
+                "direction": pos["direction"],
+                "entry_price": pos["entry_price"],
+                "exit_price": current_price,
+                "pnl_pct": round(pnl_pct, 3),
+                "exit_reason": "router_time",
+                "entry_time": pos.get("entry_time"),
+                "exit_time": str(now),
+                "dry_run": DRY_RUN,
+            })
         except Exception as exc:
             actions.append(f"⚠️ ML close failed for {symbol}: {exc}")
 
@@ -237,9 +350,50 @@ def manage_open_positions(
             if should_close:
                 pos_type = bot.position_mgr.normalize_position_type(pos_data.get("type", "long"))
                 volume = float(pos_data.get("vol", 0) or 0)
+                entry_price = float(pos_data.get("cost", 0) or 0) / max(volume, 1e-12)
+                leverage = bot.position_mgr.infer_leverage(pos_data)
+                if entry_price > 0:
+                    pnl_pct = (
+                        (current_price - entry_price) / entry_price * 100 * leverage
+                        if pos_type == "long"
+                        else (entry_price - current_price) / entry_price * 100 * leverage
+                    )
+                else:
+                    pnl_pct = 0.0
+                if DRY_RUN:
+                    active_ids.append(pair_key)
+                    actions.append(
+                        f"Dry-run would close V4 {trading_pair.yf_symbol} {pos_type} "
+                        f"@ {current_price:.4f}: {reason}"
+                    )
+                    append_jsonl(ROUTER_DECISION_LOG_FILE, {
+                        "event": "position_close_signal",
+                        "strategy": "old_v4",
+                        "symbol": trading_pair.yf_symbol,
+                        "kraken_pair": pair_key,
+                        "direction": pos_type,
+                        "entry_price": entry_price,
+                        "would_exit_price": current_price,
+                        "pnl_pct": round(pnl_pct, 3),
+                        "exit_reason": reason,
+                        "dry_run": DRY_RUN,
+                    })
+                    continue
                 closed = bot.position_mgr.close_position(pair_key, pos_type, volume, reason, pos_data, current_price)
                 if closed:
                     actions.append(f"Closed V4 {trading_pair.yf_symbol} {pos_type} @ {current_price:.4f}: {reason}")
+                    append_jsonl(ROUTER_DECISION_LOG_FILE, {
+                        "event": "position_closed",
+                        "strategy": "old_v4",
+                        "symbol": trading_pair.yf_symbol,
+                        "kraken_pair": pair_key,
+                        "direction": pos_type,
+                        "entry_price": entry_price,
+                        "exit_price": current_price,
+                        "pnl_pct": round(pnl_pct, 3),
+                        "exit_reason": reason,
+                        "dry_run": DRY_RUN,
+                    })
                 else:
                     active_ids.append(pair_key)
             else:
@@ -633,6 +787,7 @@ def execute_ml(config: Config, kraken: KrakenClient, candidate: Candidate, margi
         "margin_usd": round(margin_usd, 2),
         "leverage": leverage,
         "entry_fill": fill_how,
+        "dry_run": DRY_RUN,
         "model_version": profile.version,
         "opened_by": "strategy_router",
     }
@@ -668,6 +823,7 @@ def main() -> int:
         return 1
 
     print(f"STRATEGY ROUTER | {'DRY-RUN' if DRY_RUN else 'LIVE'} | AI={'on' if AI_ENABLED else 'off'} | model={OPENAI_MODEL}")
+    print_active_config(config)
 
     symbols = sorted(set([pair.yf_symbol for pair in config.TRADING_PAIRS] + ML_SYMBOLS + ["BTC-USD"]))
     market_data = load_market_data(symbols)
@@ -681,7 +837,22 @@ def main() -> int:
     open_orders = kraken.get_open_orders()
     trade_balance = safe_trade_balance(kraken)
     free_margin, budget_cap = margin_budget_cap(trade_balance)
+    account_context = {
+        "free_margin": free_margin,
+        "equity": float(trade_balance.get("e", 0) or 0),
+        "margin_used": float(trade_balance.get("m", 0) or 0),
+        "budget_cap_usd": budget_cap,
+        "dry_run": DRY_RUN,
+    }
     if len(open_positions) >= MAX_OPEN_POSITIONS or open_orders:
+        append_jsonl(ROUTER_DECISION_LOG_FILE, {
+            "event": "router_blocked",
+            "reason": "existing_exposure",
+            "open_positions": len(open_positions),
+            "open_orders": len(open_orders),
+            "account": account_context,
+            "dry_run": DRY_RUN,
+        })
         print(f"Existing exposure blocks new entries: positions={len(open_positions)}, orders={len(open_orders)}")
         return 0
 
@@ -690,25 +861,44 @@ def main() -> int:
     candidates = old_candidates + ml_candidates
     print(f"Candidates: old_v4={len(old_candidates)}, ml={len(ml_candidates)}")
 
-    if not candidates:
-        if NOTIFY_NO_TRADE:
-            telegram.send("<b>Strategy Router</b>\nNo valid candidates this run.")
-        print("No valid candidates.")
-        return 0
-
-    account_context = {
-        "free_margin": free_margin,
-        "equity": float(trade_balance.get("e", 0) or 0),
-        "margin_used": float(trade_balance.get("m", 0) or 0),
-        "budget_cap_usd": budget_cap,
-        "dry_run": DRY_RUN,
-    }
     market_context = {
         "timestamp": max(df.index[-1] for df in market_data.values()).isoformat(),
         "candidate_count": len(candidates),
         "old_v4_candidate_count": len(old_candidates),
         "ml_candidate_count": len(ml_candidates),
     }
+    deterministic_decision = deterministic_router(candidates)
+
+    if not candidates:
+        decision = {
+            "decision": "no_trade",
+            "symbol": "",
+            "budget_fraction": 0.0,
+            "leverage": 1,
+            "old_v4_budget_fraction": 0.0,
+            "ml_budget_fraction": 0.0,
+            "ml_v2_budget_fraction": 0.0,
+            "ml_v3_budget_fraction": 0.0,
+            "confidence": 0.0,
+            "rationale": "No valid candidates.",
+            "risk_notes": [],
+        }
+        log_router_decision(
+            candidates,
+            account_context,
+            market_context,
+            decision,
+            deterministic_decision,
+            None,
+            0.0,
+            1,
+            [],
+            {"status": "no_candidates"},
+        )
+        if NOTIFY_NO_TRADE:
+            telegram.send("<b>Strategy Router</b>\nNo valid candidates this run.")
+        print("No valid candidates.")
+        return 0
 
     try:
         decision = ask_openai_router(candidates, account_context, market_context)
@@ -730,6 +920,18 @@ def main() -> int:
     selected, margin_usd, leverage, validation_notes = validate_decision(decision, candidates, budget_cap, free_margin)
     if selected is None:
         lines = validation_notes + [f"Candidates available: {len(candidates)}"]
+        log_router_decision(
+            candidates,
+            account_context,
+            market_context,
+            decision,
+            deterministic_decision,
+            None,
+            0.0,
+            leverage,
+            validation_notes,
+            {"status": "no_trade"},
+        )
         if NOTIFY_NO_TRADE or validation_notes or decision.get("decision") != "no_trade":
             notify_decision(telegram, "Strategy Router no-trade", decision, lines)
         print("No trade:", decision.get("rationale", ""), validation_notes)
@@ -746,10 +948,34 @@ def main() -> int:
             raise RuntimeError(f"Unsupported strategy {selected.strategy}")
     except Exception as exc:
         decision["rationale"] = f"Execution failed after router decision: {exc}"
+        log_router_decision(
+            candidates,
+            account_context,
+            market_context,
+            decision,
+            deterministic_decision,
+            selected,
+            margin_usd,
+            leverage,
+            validation_notes,
+            {"status": "execution_failed", "error": str(exc)},
+        )
         notify_decision(telegram, "Strategy Router execution failed", decision, validation_notes)
         raise
 
     lines = validation_notes + [result_line]
+    log_router_decision(
+        candidates,
+        account_context,
+        market_context,
+        decision,
+        deterministic_decision,
+        selected,
+        margin_usd,
+        leverage,
+        validation_notes,
+        {"status": "dry_run" if DRY_RUN else "executed", "result": result_line},
+    )
     notify_decision(telegram, "Strategy Router trade", decision, lines)
     save_json(ROUTER_STATE_FILE, {
         "last_decision": decision,

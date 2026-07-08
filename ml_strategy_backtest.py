@@ -25,6 +25,7 @@ promoting to live trading.
 """
 
 import argparse
+import sys
 import numpy as np
 import pandas as pd
 
@@ -40,10 +41,73 @@ from ml_strategy import (
     dynamic_probability_threshold,
     estimate_payoff_stats,
     expected_value,
+    get_strategy_profile,
     passes_fng_filter,
     recent_volatility,
     relative_strength_7d,
 )
+
+
+LIVE_ML_SYMBOLS = "XRP-USD,ADA-USD,SOL-USD,LINK-USD,DOGE-USD"
+
+
+def supplied_cli_options(argv: list[str]) -> set[str]:
+    return {
+        token.split("=", 1)[0]
+        for token in argv
+        if token.startswith("--")
+    }
+
+
+def option_was_supplied(options: set[str], name: str) -> bool:
+    return name in options
+
+
+def apply_live_profile_defaults(args: argparse.Namespace, supplied_options: set[str]) -> None:
+    profile = get_strategy_profile(args.live_profile)
+
+    if not option_was_supplied(supplied_options, "--symbols"):
+        args.symbols = LIVE_ML_SYMBOLS
+    if not option_was_supplied(supplied_options, "--horizon"):
+        args.horizon = profile.horizon
+    if not option_was_supplied(supplied_options, "--buy-thr"):
+        args.buy_thr = profile.buy_thr
+    if not option_was_supplied(supplied_options, "--sell-thr"):
+        args.sell_thr = 0.0 if profile.long_only else 0.35
+    if not option_was_supplied(supplied_options, "--exit-thr"):
+        args.exit_thr = profile.exit_thr
+    if not option_was_supplied(supplied_options, "--no-fng-features"):
+        args.no_fng_features = not profile.use_fng_features
+    if not option_was_supplied(supplied_options, "--fng-filter"):
+        args.fng_filter = profile.use_fng_filter
+    if profile.long_only and not option_was_supplied(supplied_options, "--long-only"):
+        args.long_only = True
+    if profile.version == "v3" and not option_was_supplied(supplied_options, "--v3"):
+        args.v3 = True
+
+    if not option_was_supplied(supplied_options, "--margin-open-fee"):
+        args.margin_open_fee = profile.margin_open_fee
+    if not option_was_supplied(supplied_options, "--rollover-fee"):
+        args.rollover_fee = profile.rollover_fee_4h
+    if not option_was_supplied(supplied_options, "--minimum-edge"):
+        args.minimum_edge = profile.minimum_edge
+    if not option_was_supplied(supplied_options, "--ev-cost-multiplier"):
+        args.ev_cost_multiplier = profile.ev_cost_multiplier
+    if not option_was_supplied(supplied_options, "--cost-aware-labels"):
+        args.cost_aware_labels = profile.use_cost_aware_labels
+    if not option_was_supplied(supplied_options, "--btc-features"):
+        args.btc_features = profile.use_btc_features
+    if not option_was_supplied(supplied_options, "--btc-regime-filter"):
+        args.btc_regime_filter = profile.use_btc_regime_filter
+    if not option_was_supplied(supplied_options, "--relative-strength-filter"):
+        args.relative_strength_filter = profile.use_relative_strength_filter
+    if not option_was_supplied(supplied_options, "--expected-value-filter"):
+        args.expected_value_filter = profile.use_expected_value_filter
+
+    if not option_was_supplied(supplied_options, "--entry-fee"):
+        args.entry_fee = args.maker_entry_fee
+    if not option_was_supplied(supplied_options, "--exit-fee"):
+        args.exit_fee = args.taker_exit_fee
 
 
 def backtest_symbol(
@@ -73,6 +137,8 @@ def backtest_symbol(
     use_relative_strength_filter: bool = False,
     use_expected_value_filter: bool = False,
     ev_cost_multiplier: float = 1.5,
+    entry_fee_rate: float | None = None,
+    exit_fee_rate: float | None = None,
 ) -> dict:
     """Run the walk-forward backtest for one coin and return its stats."""
     cost_model = cost_model or KrakenCostModel(
@@ -106,7 +172,9 @@ def backtest_symbol(
     # A row is usable as a feature only if none of its features are NaN.
     valid_feat = ~np.isnan(X_all).any(axis=1)
 
-    fee_cost_pct = fee_rate * 100 * leverage * 2  # legacy round-trip fee, % of margin
+    entry_fee_rate = fee_rate if entry_fee_rate is None else entry_fee_rate
+    exit_fee_rate = fee_rate if exit_fee_rate is None else exit_fee_rate
+    fee_cost_pct = (entry_fee_rate + exit_fee_rate) * 100 * leverage
 
     model = None
     last_train_pos = -10**9
@@ -306,6 +374,8 @@ def main() -> None:
     parser.add_argument('--symbols', default='XRP-USD,ADA-USD,SOL-USD,BTC-USD,ETH-USD')
     parser.add_argument('--period', default='720d')
     parser.add_argument('--interval', default='1h')
+    parser.add_argument('--live-profile', choices=['v2', 'v3'], default=None,
+                        help="Apply saved live profile defaults and live symbol set unless explicitly overridden.")
     parser.add_argument('--horizon', type=int, default=72, help="Hold this many bars (~3 days at 1h).")
     parser.add_argument('--buy-thr', type=float, default=0.70)
     parser.add_argument('--sell-thr', type=float, default=0.45)
@@ -316,6 +386,10 @@ def main() -> None:
     parser.add_argument('--fng-filter', action='store_true',
                         help="Skip entries when F&G index is 25-40.")
     parser.add_argument('--fee', type=float, default=0.001, help="Maker fee per side (0.001 = 0.10%%).")
+    parser.add_argument('--entry-fee', type=float, default=None,
+                        help="Entry fee used for realized PnL. Defaults to --fee unless --live-profile is used.")
+    parser.add_argument('--exit-fee', type=float, default=None,
+                        help="Exit fee used for realized PnL. Defaults to --fee unless --live-profile is used.")
     parser.add_argument('--leverage', type=float, default=2.0)
     parser.add_argument('--model', choices=['logistic', 'gbm'], default='logistic')
     parser.add_argument('--train-min', type=int, default=4000, help="Bars before trading starts.")
@@ -344,6 +418,12 @@ def main() -> None:
     parser.add_argument('--ev-cost-multiplier', type=float, default=1.5)
     parser.add_argument('--out', default='ml_strategy_trades.csv')
     args = parser.parse_args()
+    supplied_options = supplied_cli_options(sys.argv[1:])
+
+    if args.live_profile and args.v3 and args.live_profile != 'v3':
+        parser.error("--v3 conflicts with --live-profile v2")
+    if args.live_profile:
+        apply_live_profile_defaults(args, supplied_options)
 
     if args.long_only:
         args.sell_thr = 0.0
@@ -368,8 +448,16 @@ def main() -> None:
     needs_btc = args.btc_features or args.btc_regime_filter or args.relative_strength_filter
     btc_data = get_history('BTC-USD', args.period, args.interval) if needs_btc else None
 
-    print(f"ML strategy backtest | model={args.model} | horizon={args.horizon}b | "
-          f"lev={args.leverage}x | fee={args.fee * 100:.2f}%/side | "
+    entry_fee = args.fee if args.entry_fee is None else args.entry_fee
+    exit_fee = args.fee if args.exit_fee is None else args.exit_fee
+    if entry_fee == exit_fee:
+        fee_label = f"fee={entry_fee * 100:.2f}%/side"
+    else:
+        fee_label = f"entry_fee={entry_fee * 100:.2f}% exit_fee={exit_fee * 100:.2f}%"
+
+    profile_label = f" | live_profile={args.live_profile}" if args.live_profile else ""
+    print(f"ML strategy backtest{profile_label} | model={args.model} | horizon={args.horizon}b | "
+          f"lev={args.leverage}x | {fee_label} | "
           f"margin open={args.margin_open_fee * 100:.2f}% + rollover={args.rollover_fee * 100:.2f}%/4h | "
           f"buy>{args.buy_thr} sell<{args.sell_thr} | exit_thr={args.exit_thr or 'off'} | "
           f"fng={'filter' if args.fng_filter else 'features' if not args.no_fng_features else 'off'} | "
@@ -404,6 +492,8 @@ def main() -> None:
             use_relative_strength_filter=args.relative_strength_filter,
             use_expected_value_filter=args.expected_value_filter,
             ev_cost_multiplier=args.ev_cost_multiplier,
+            entry_fee_rate=entry_fee,
+            exit_fee_rate=exit_fee,
         )
         results.append(r)
         all_trades.extend(r.get('trades', []))

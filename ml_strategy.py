@@ -6,11 +6,11 @@ or ml_strategy_backtest.py --v3 for backtests.
 
 V2 (default live): more trades, higher total compounding in backtests.
   h=72, thr=0.68, F&G features + filter, adaptive exit at 0.40.
-  Backtest (720d, 5 coins): +6.30% expectancy/trade, PF ~2.2, ~79 trades.
+  Revalidate with ml_strategy_backtest.py --live-profile v2 before promotion.
 
 V3 (opt-in): fewer trades, higher per-trade edge, cost-aware labels.
   h=72, thr=0.70, cost-aware labels, EV-gated market entries, confidence sizing.
-  Backtest (720d, 5 coins): +15.39% expectancy/trade, PF ~12, ~24 trades.
+  Disabled in the scheduled router until a fresh walk-forward is positive.
 """
 
 from dataclasses import dataclass, field

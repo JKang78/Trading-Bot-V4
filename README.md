@@ -12,11 +12,13 @@ File: `strategy_router.py`
 
 Workflow: `.github/workflows/strategy-router.yml`
 
-Runs every 15 minutes. It checks signals from:
+Runs every 15 minutes in live mode. It checks signals from:
 
 - old V4 swing bot
 - ML V2 strategy
-- ML V3 strategy
+
+ML V3 is intentionally disabled in the scheduled router until a fresh
+walk-forward backtest is positive.
 
 If there are valid candidates, OpenAI chooses:
 
@@ -34,6 +36,10 @@ The code still enforces hard safety limits before any order:
 - max 35% total margin exposure
 - max 2x leverage
 - no new entries if there is already an open position or open order
+
+Every run appends a shadow record to `router_decisions.jsonl` with the
+candidates, AI decision, deterministic highest-score benchmark, selected trade,
+validation notes, and execution status.
 
 ### Daily Telegram Portfolio Report
 
@@ -80,6 +86,16 @@ Do not commit real keys to the repo.
 
 ## Common Commands
 
+Run the scheduled AI router manually in live mode:
+
+```bash
+gh workflow run strategy-router.yml \
+  --repo JKang78/Trading-Bot-V4 \
+  --ref main \
+  -f dry_run=false \
+  -f ai_enabled=true
+```
+
 Run the AI router safely in GitHub dry-run mode:
 
 ```bash
@@ -106,6 +122,15 @@ venv/bin/pip install -r requirements.txt
 ROUTER_DRY_RUN=true venv/bin/python strategy_router.py
 ```
 
+Run the standard ML V2 validation backtest that matches the live profile:
+
+```bash
+venv/bin/python ml_strategy_backtest.py \
+  --live-profile v2 \
+  --period 720d \
+  --out ml_strategy_trades_live_v2.csv
+```
+
 ## Main Files
 
 ```text
@@ -124,6 +149,7 @@ These files are generated and should not be committed:
 
 ```text
 strategy_router_state.json
+router_decisions.jsonl
 ml_live_state.json
 v4_position_state.json
 rl_state.json
@@ -132,6 +158,9 @@ rl_state.json
 
 ## Current Operating Model
 
-GitHub Actions is the live runtime.
+GitHub Actions is the scheduled runtime.
 
-The AI router is the only scheduled trading controller. The old V4 bot and ML bot can still be run manually, but their automatic schedules are paused to avoid two bots trading the same Kraken account at the same time.
+The AI router is the only scheduled trading controller and is currently
+scheduled as live by default. The old V4 bot and ML bot can still be run
+manually, but their automatic schedules are paused to avoid two bots trading the
+same Kraken account at the same time.
