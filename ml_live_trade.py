@@ -7,7 +7,7 @@ It trades the ML strategy (V2 by default, V3 opt-in — see ml_strategy.py) with
 few conservative, user-chosen settings:
 - Coins: XRP, ADA, SOL, LINK, DOGE (each passed walk-forward validation with
   positive expectancy in both the early and holdout periods).
-- Each trade uses 20% of usable margin at 2x leverage, so all five coins
+- Each trade uses 25% of usable margin at 2x leverage, so all five coins
   together can use the full usable margin (balance / 1.5) but never more.
 - Hold ~3 days (72 x 1h bars), then close (time-based exit).
 - At most one position per coin.

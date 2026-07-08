@@ -64,7 +64,7 @@ jobs:
         ML_LIVE_STRATEGY: ${{ github.event.inputs.strategy || 'v2' }}
         ML_LIVE_SYMBOLS: 'XRP-USD,ADA-USD,SOL-USD,LINK-USD,DOGE-USD'
         ML_LIVE_LEVERAGE: '2'
-        ML_LIVE_POSITION_FRACTION: '0.20'
+        ML_LIVE_POSITION_FRACTION: '0.25'
         ML_LIVE_MARGIN_SAFETY: '1.0'
         ML_LIVE_MAX_OPEN: '5'
         ML_LIVE_LONG_ONLY: 'true'
