@@ -22,7 +22,8 @@ walk-forward validation with positive after-cost expectancy).
 How it trades:
 
 - Long-only by default (the backtested short side barely covered its costs).
-- Each trade uses 20% of usable margin at 2x leverage.
+- Each trade uses 25% of usable margin at 2x leverage.
+- On small accounts, size is bumped up to Kraken's minimum order when affordable.
 - Hold ~3 days (72 x 1h bars), then close on a time-based exit.
 - At most one position per coin, up to 5 open positions.
 - Entries try a post-only maker limit order first, then fall back to a market

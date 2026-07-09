@@ -7,8 +7,9 @@ It trades the ML strategy (V2 by default, V3 opt-in — see ml_strategy.py) with
 few conservative, user-chosen settings:
 - Coins: XRP, ADA, SOL, LINK, DOGE (each passed walk-forward validation with
   positive expectancy in both the early and holdout periods).
-- Each trade uses 25% of usable margin at 2x leverage, so all five coins
-  together can use the full usable margin (balance / 1.5) but never more.
+- Each trade targets 25% of usable margin at 2x leverage.
+- On small accounts, size is bumped up to Kraken's minimum order size when
+  the account can afford it (still never above available usable margin).
 - Hold ~3 days (72 x 1h bars), then close (time-based exit).
 - At most one position per coin.
 
@@ -88,6 +89,8 @@ LEVERAGE = _env_int('ML_LIVE_LEVERAGE', 2)
 POSITION_FRACTION = _env_float('ML_LIVE_POSITION_FRACTION', 0.20)
 MAX_OPEN = _env_int('ML_LIVE_MAX_OPEN', 5)
 MARGIN_SAFETY_FACTOR = _env_float('ML_LIVE_MARGIN_SAFETY', 1.5)
+# When True, bump a too-small 25% size up to Kraken's min order if affordable.
+ALLOW_MIN_SIZE_BUMP = _env_bool('ML_LIVE_ALLOW_MIN_SIZE_BUMP', True)
 DRY_RUN = _env_bool('ML_LIVE_DRY_RUN', False)
 LONG_ONLY = _env_bool('ML_LIVE_LONG_ONLY', PROFILE.long_only)
 USE_MAKER_ENTRY = _env_bool('ML_LIVE_MAKER_ENTRY', True)
@@ -117,6 +120,39 @@ def confidence_size_multiplier(probability: float, threshold: float) -> float:
     if probability < threshold + 0.07:
         return 0.75
     return 1.00
+
+
+def size_trade(
+    usable_margin: float,
+    position_fraction: float,
+    conf_mult: float,
+    regime_mult: float,
+    leverage: int,
+    price: float,
+    min_volume: float,
+    allow_min_bump: bool = True,
+) -> tuple[float, float, str]:
+    """
+    Pick margin and volume for one trade.
+
+    Default: use position_fraction of usable margin.
+    Small accounts: if that is below Kraken's min volume, bump up to the
+    minimum as long as usable margin can cover it. Never exceed usable margin.
+    Returns (margin_usd, volume, note).
+    """
+    target_margin = usable_margin * position_fraction * conf_mult * regime_mult
+    volume = (target_margin * leverage) / price if price > 0 else 0.0
+    note = 'target'
+
+    if volume >= min_volume and target_margin > 0:
+        return target_margin, volume, note
+
+    # Target size is too small for Kraken — try the exchange minimum.
+    min_margin = (min_volume * price) / leverage if leverage > 0 else float('inf')
+    if allow_min_bump and min_margin <= usable_margin and min_margin > 0:
+        return min_margin, min_volume, 'bumped_to_exchange_min'
+
+    return target_margin, volume, 'below_min'
 
 
 def load_state() -> dict:
@@ -360,16 +396,44 @@ def main() -> None:
 
     candidates.sort(key=lambda item: item[3].score, reverse=True)
 
+    # Prefer coins we can actually afford on a small account (min-size bump).
+    def can_afford(item) -> bool:
+        symbol, kp, df, sig = item
+        price = float(df['Close'].iloc[-1])
+        min_margin = (kp.min_volume * price) / LEVERAGE if LEVERAGE > 0 else float('inf')
+        return min_margin <= usable_margin
+
+    candidates.sort(key=lambda item: (0 if can_afford(item) else 1, -item[3].score))
+
+    remaining_margin = usable_margin
     for symbol, kp, df, sig in candidates[:open_slots]:
         current_price = float(df['Close'].iloc[-1])
         conf_mult = (confidence_size_multiplier(sig.prob_up, sig.dynamic_threshold)
                      if USE_CONFIDENCE_SIZING else 1.0)
-        margin_usd = usable_margin * POSITION_FRACTION * conf_mult * sig.regime_size_multiplier
-        volume = (margin_usd * LEVERAGE) / current_price
+        margin_usd, volume, size_note = size_trade(
+            usable_margin=remaining_margin,
+            position_fraction=POSITION_FRACTION,
+            conf_mult=conf_mult,
+            regime_mult=sig.regime_size_multiplier,
+            leverage=LEVERAGE,
+            price=current_price,
+            min_volume=kp.min_volume,
+            allow_min_bump=ALLOW_MIN_SIZE_BUMP,
+        )
 
         if margin_usd <= 0 or volume < kp.min_volume:
-            actions.append(f"skip {symbol}: volume {volume:.8f} < min {kp.min_volume} (margin ${margin_usd:.2f})")
+            min_margin = (kp.min_volume * current_price) / LEVERAGE if LEVERAGE > 0 else 0.0
+            actions.append(
+                f"skip {symbol}: need >= ${min_margin:.2f} margin for min size "
+                f"{kp.min_volume} (have ${remaining_margin:.2f} remaining, "
+                f"target ${remaining_margin * POSITION_FRACTION:.2f})"
+            )
             continue
+        if size_note == 'bumped_to_exchange_min':
+            actions.append(
+                f"size {symbol}: bumped to Kraken min "
+                f"(margin ${margin_usd:.2f}, vol={volume})"
+            )
 
         order_type = 'buy' if sig.signal == 'BUY' else 'sell'
         direction = 'long' if sig.signal == 'BUY' else 'short'
@@ -414,6 +478,7 @@ def main() -> None:
                            f"vol={filled_volume:.6f} ({fill_how}, p={sig.prob_up:.2f}, "
                            f"thr={sig.dynamic_threshold:.2f}, ev={sig.expected_value:.2%}, "
                            f"score={sig.score:.2f}, margin ${margin_usd:.2f})")
+            remaining_margin = max(0.0, remaining_margin - margin_usd)
         except Exception as e:
             actions.append(f"⚠️ open {symbol} failed: {e}")
 

@@ -66,6 +66,7 @@ jobs:
         ML_LIVE_LEVERAGE: '2'
         ML_LIVE_POSITION_FRACTION: '0.25'
         ML_LIVE_MARGIN_SAFETY: '1.0'
+        ML_LIVE_ALLOW_MIN_SIZE_BUMP: 'true'
         ML_LIVE_MAX_OPEN: '5'
         ML_LIVE_LONG_ONLY: 'true'
         ML_LIVE_FNG_FEATURES: 'true'
