@@ -52,6 +52,8 @@ def fetch_cc_hourly(coin: str, start_ts: int = 1514764800) -> pd.DataFrame:
     CACHE_DIR.mkdir(exist_ok=True)
     frames = []
     to_ts = int(time.time())
+    rate_limit_waits = 0
+    max_rate_limit_waits = 6
     while to_ts > start_ts:
         r = requests.get(
             'https://min-api.cryptocompare.com/data/v2/histohour',
@@ -61,9 +63,13 @@ def fetch_cc_hourly(coin: str, start_ts: int = 1514764800) -> pd.DataFrame:
         if r.get('Response') != 'Success':
             msg = r.get('Message', '')
             if 'rate limit' in msg.lower():
+                rate_limit_waits += 1
+                if rate_limit_waits >= max_rate_limit_waits:
+                    print(f"  {coin}: rate limit persists after {max_rate_limit_waits} waits, stopping download", flush=True)
+                    break
                 # The free tier has an HOURLY quota, and every retry burns more
                 # of it. Back off hard and wait for the window to reset.
-                print(f"  {coin}: hourly rate limit hit, sleeping 10 min...", flush=True)
+                print(f"  {coin}: hourly rate limit hit ({rate_limit_waits}/{max_rate_limit_waits}), sleeping 10 min...", flush=True)
                 time.sleep(600)
                 continue
             print(f"  {coin}: API error: {msg[:120]}")

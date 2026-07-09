@@ -2,7 +2,7 @@ name: ML Strategy LIVE Trading (real money)
 
 # ⚠️ THIS PLACES REAL ORDERS ON KRAKEN via ml_live_trade.py.
 # This is now the ONLY scheduled live trading controller. It runs the ML V2
-# strategy (the most profitable profile in our backtests) with real money.
+# strategy with the long-history profit profile selected by research.
 # The AI strategy router has been removed.
 # Run manually with dry_run=true from GitHub Actions to test safely.
 
@@ -62,12 +62,18 @@ jobs:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         ML_LIVE_STRATEGY: ${{ github.event.inputs.strategy || 'v2' }}
-        ML_LIVE_SYMBOLS: 'XRP-USD,ADA-USD,SOL-USD,LINK-USD,DOGE-USD'
+        ML_LIVE_SYMBOLS: 'SOL-USD,LINK-USD,DOGE-USD'
         ML_LIVE_LEVERAGE: '2'
         ML_LIVE_POSITION_FRACTION: '0.25'
+        ML_LIVE_CONFIDENCE_SIZING: 'true'
+        ML_LIVE_CONFIDENCE_LOW_PROB: '0.72'
+        ML_LIVE_CONFIDENCE_HIGH_PROB: '0.78'
+        ML_LIVE_CONFIDENCE_LOW_FRACTION: '0.15'
+        ML_LIVE_CONFIDENCE_MID_FRACTION: '0.25'
+        ML_LIVE_CONFIDENCE_HIGH_FRACTION: '0.35'
         ML_LIVE_MARGIN_SAFETY: '1.0'
         ML_LIVE_ALLOW_MIN_SIZE_BUMP: 'true'
-        ML_LIVE_MAX_OPEN: '5'
+        ML_LIVE_MAX_OPEN: '3'
         ML_LIVE_LONG_ONLY: 'true'
         ML_LIVE_FNG_FEATURES: 'true'
         ML_LIVE_FNG_FILTER: 'true'

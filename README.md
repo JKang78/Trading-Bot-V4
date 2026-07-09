@@ -13,19 +13,25 @@ File: `ml_live_trade.py`
 Workflow: `.github/workflows/ml-live-trade.yml`
 
 Runs every hour in live mode with real money. This is the only scheduled
-trading controller. It trades the ML V2 strategy, which was the most profitable
-profile in our backtests.
+trading controller. It trades the ML V2 strategy using the long-history
+profit profile from `research_long_history_profit_harness.py`.
 
-Coins: `XRP-USD, ADA-USD, SOL-USD, LINK-USD, DOGE-USD` (each passed
-walk-forward validation with positive after-cost expectancy).
+Coins: `SOL-USD, LINK-USD, DOGE-USD`.
+
+The long-history harness ranked this core-momentum subset with confidence
+sizing as the highest-ending-equity margin-feasible profile among the tested
+live-symbol variants. XRP and ADA remain research candidates but are not in the
+scheduled live set.
 
 How it trades:
 
 - Long-only by default (the backtested short side barely covered its costs).
-- Each trade uses 25% of usable margin at 2x leverage.
+- Each trade uses confidence sizing at 2x leverage:
+  15% margin for `prob_up < 0.72`, 25% for `0.72 <= prob_up < 0.78`,
+  and 35% for `prob_up >= 0.78`.
 - On small accounts, size is bumped up to Kraken's minimum order when affordable.
 - Hold ~3 days (72 x 1h bars), then close on a time-based exit.
-- At most one position per coin, up to 5 open positions.
+- At most one position per coin, up to 3 open positions.
 - Entries try a post-only maker limit order first, then fall back to a market
   order only if the expected value still survives taker fees and slippage.
 - Exits are always market orders (a time-boxed strategy must be able to get out).
@@ -34,6 +40,8 @@ State (which positions we opened and when to close them) is saved to
 `ml_live_state.json` and cached between runs so it survives independent cron runs.
 
 Fresh V2/V3 research is captured by `research_v2_v3_profitability.py`.
+Long-history profit, sizing, symbol, and fee-tier research is captured by
+`research_long_history_profit_harness.py`.
 
 To test safely, run the workflow manually with `dry_run=true` — it runs the full
 logic without placing real orders.
@@ -122,8 +130,15 @@ Run the standard ML V2 validation backtest that matches the live profile:
 ```bash
 venv/bin/python ml_strategy_backtest.py \
   --live-profile v2 \
+  --symbols SOL-USD,LINK-USD,DOGE-USD \
   --period 720d \
   --out ml_strategy_trades_live_v2.csv
+```
+
+Run the long-history profit harness:
+
+```bash
+venv/bin/python research_long_history_profit_harness.py --reuse-trades
 ```
 
 Run the V2/V3 fee-sensitivity research sweep:

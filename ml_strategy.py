@@ -305,6 +305,71 @@ def btc_regime_state(regime_frame: pd.DataFrame, ts: pd.Timestamp) -> BTCRegimeS
     return BTCRegimeState('neutral', False, 3, 0.5, reasons)
 
 
+def compute_strict_btc_bear_frame(
+    btc_data: pd.DataFrame,
+    ema_span_days: int = 200,
+    lookback_days: int = 56,
+    min_drawdown: float = -0.10,
+) -> pd.DataFrame:
+    """
+    Stricter bear classifier for research.
+
+    Bear only when BOTH are true on daily closes:
+      1. BTC is below its 200-day EMA
+      2. BTC is down at least `min_drawdown` over `lookback_days` (default 8 weeks)
+
+    This is meant to catch sustained bears (2018/2022), not every dip/high-vol day.
+    """
+    close = btc_data['Close'].copy()
+    idx = close.index
+    daily = close.resample('1D').last().dropna()
+    ema200 = daily.ewm(span=ema_span_days, min_periods=max(50, ema_span_days // 2), adjust=False).mean()
+    ret_lookback = daily.pct_change(lookback_days)
+
+    below_ema = daily < ema200
+    deep_down = ret_lookback <= min_drawdown
+    bear = (below_ema & deep_down).fillna(False)
+
+    aligned_daily = daily.reindex(idx, method='ffill')
+    aligned_ema = ema200.reindex(idx, method='ffill')
+    aligned_ret = ret_lookback.reindex(idx, method='ffill')
+    aligned_bear = bear.reindex(idx, method='ffill').fillna(False)
+    aligned_below = below_ema.reindex(idx, method='ffill').fillna(False)
+    aligned_down = deep_down.reindex(idx, method='ffill').fillna(False)
+
+    regime = pd.Series('non_bear', index=idx, dtype='object')
+    regime[aligned_bear] = 'bear'
+
+    return pd.DataFrame({
+        'regime': regime,
+        'btc_daily_close': aligned_daily,
+        'btc_daily_ema200': aligned_ema,
+        'btc_ret_8w': aligned_ret,
+        'below_ema200': aligned_below,
+        'deep_down_8w': aligned_down,
+        'is_bear': aligned_bear,
+    })
+
+
+def strict_btc_bear_state(regime_frame: pd.DataFrame, ts: pd.Timestamp) -> BTCRegimeState:
+    """Return strict bear/non-bear state at timestamp ts."""
+    if regime_frame.empty:
+        return BTCRegimeState('non_bear', False, 5, 1.0, ['strict_bear_unavailable'])
+
+    pos = regime_frame.index.searchsorted(pd.Timestamp(ts), side='right') - 1
+    if pos < 0:
+        return BTCRegimeState('non_bear', False, 5, 1.0, ['strict_bear_unavailable'])
+
+    row = regime_frame.iloc[pos]
+    reasons = [
+        name for name in ('below_ema200', 'deep_down_8w')
+        if bool(row.get(name, False))
+    ]
+    if bool(row.get('is_bear', False)) or str(row.get('regime')) == 'bear':
+        return BTCRegimeState('bear', True, 0, 0.0, reasons)
+    return BTCRegimeState('non_bear', False, 5, 1.0, reasons)
+
+
 def estimate_payoff_stats(future_return: pd.Series, trainable_mask: np.ndarray) -> tuple[float, float]:
     """Average gross winning return and average gross losing return magnitude."""
     known = np.asarray(future_return, dtype=float)[trainable_mask]

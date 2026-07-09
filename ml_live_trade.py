@@ -5,9 +5,10 @@ REAL-MONEY LIVE TRADER for the longer-horizon ML strategy.
 
 It trades the ML strategy (V2 by default, V3 opt-in — see ml_strategy.py) with a
 few conservative, user-chosen settings:
-- Coins: XRP, ADA, SOL, LINK, DOGE (each passed walk-forward validation with
-  positive expectancy in both the early and holdout periods).
-- Each trade targets 25% of usable margin at 2x leverage.
+- Coins: SOL, LINK, DOGE (the long-history core momentum subset with the
+  highest margin-feasible ending equity in the profit harness).
+- Each trade uses confidence sizing at 2x leverage: 15%, 25%, or 35% of usable
+  margin depending on signal strength.
 - On small accounts, size is bumped up to Kraken's minimum order size when
   the account can afford it (still never above available usable margin).
 - Hold ~3 days (72 x 1h bars), then close (time-based exit).
@@ -76,7 +77,7 @@ STRATEGY_VERSION = _env_str('ML_LIVE_STRATEGY', 'v2').lower()
 PROFILE = get_strategy_profile(STRATEGY_VERSION)
 STATE_FILE = _env_str('ML_LIVE_STATE_FILE', 'ml_live_state.json')
 SYMBOLS = [s.strip() for s in _env_str(
-    'ML_LIVE_SYMBOLS', 'XRP-USD,ADA-USD,SOL-USD,LINK-USD,DOGE-USD').split(',') if s.strip()]
+    'ML_LIVE_SYMBOLS', 'SOL-USD,LINK-USD,DOGE-USD').split(',') if s.strip()]
 PERIOD = _env_str('ML_LIVE_PERIOD', '720d')
 INTERVAL = _env_str('ML_LIVE_INTERVAL', '1h')
 HORIZON = _env_int('ML_LIVE_HORIZON', PROFILE.horizon)
@@ -86,8 +87,8 @@ EXIT_THR = _env_float('ML_LIVE_EXIT_THR', PROFILE.exit_thr)
 USE_FNG_FEATURES = _env_bool('ML_LIVE_FNG_FEATURES', PROFILE.use_fng_features)
 USE_FNG_FILTER = _env_bool('ML_LIVE_FNG_FILTER', PROFILE.use_fng_filter)
 LEVERAGE = _env_int('ML_LIVE_LEVERAGE', 2)
-POSITION_FRACTION = _env_float('ML_LIVE_POSITION_FRACTION', 0.20)
-MAX_OPEN = _env_int('ML_LIVE_MAX_OPEN', 5)
+POSITION_FRACTION = _env_float('ML_LIVE_POSITION_FRACTION', 0.25)
+MAX_OPEN = _env_int('ML_LIVE_MAX_OPEN', 3)
 MARGIN_SAFETY_FACTOR = _env_float('ML_LIVE_MARGIN_SAFETY', 1.5)
 # When True, bump a too-small 25% size up to Kraken's min order if affordable.
 ALLOW_MIN_SIZE_BUMP = _env_bool('ML_LIVE_ALLOW_MIN_SIZE_BUMP', True)
@@ -111,15 +112,28 @@ USE_RELATIVE_STRENGTH_FILTER = _env_bool('ML_LIVE_RELATIVE_STRENGTH_FILTER', PRO
 USE_EXPECTED_VALUE_FILTER = _env_bool('ML_LIVE_EXPECTED_VALUE_FILTER', PROFILE.use_expected_value_filter)
 USE_EV_EXIT = _env_bool('ML_LIVE_EV_EXIT', PROFILE.use_ev_exit)
 EV_GATED_MARKET_FALLBACK = _env_bool('ML_LIVE_EV_GATED_MARKET', PROFILE.ev_gated_market_fallback)
-USE_CONFIDENCE_SIZING = _env_bool('ML_LIVE_CONFIDENCE_SIZING', PROFILE.use_confidence_sizing)
+USE_CONFIDENCE_SIZING = _env_bool('ML_LIVE_CONFIDENCE_SIZING', True)
+CONFIDENCE_LOW_PROB = _env_float('ML_LIVE_CONFIDENCE_LOW_PROB', 0.72)
+CONFIDENCE_HIGH_PROB = _env_float('ML_LIVE_CONFIDENCE_HIGH_PROB', 0.78)
+CONFIDENCE_LOW_FRACTION = _env_float('ML_LIVE_CONFIDENCE_LOW_FRACTION', 0.15)
+CONFIDENCE_MID_FRACTION = _env_float('ML_LIVE_CONFIDENCE_MID_FRACTION', POSITION_FRACTION)
+CONFIDENCE_HIGH_FRACTION = _env_float('ML_LIVE_CONFIDENCE_HIGH_FRACTION', 0.35)
 
 
 def confidence_size_multiplier(probability: float, threshold: float) -> float:
-    if probability < threshold + 0.03:
-        return 0.50
-    if probability < threshold + 0.07:
-        return 0.75
-    return 1.00
+    """Return multiplier that maps signal confidence to target margin fraction."""
+    if POSITION_FRACTION <= 0:
+        return 0.0
+
+    low_prob = max(CONFIDENCE_LOW_PROB, threshold)
+    high_prob = max(CONFIDENCE_HIGH_PROB, low_prob)
+    if probability < low_prob:
+        target_fraction = CONFIDENCE_LOW_FRACTION
+    elif probability < high_prob:
+        target_fraction = CONFIDENCE_MID_FRACTION
+    else:
+        target_fraction = CONFIDENCE_HIGH_FRACTION
+    return max(0.0, target_fraction / POSITION_FRACTION)
 
 
 def size_trade(
@@ -293,9 +307,11 @@ def main() -> None:
     state = load_state()
     actions = []
 
-    # Fresh data per coin (used for both signals and current price).
+    # Fresh data for active symbols plus any legacy open positions we still
+    # need to manage after a symbol-set change.
     data_by_symbol = {}
-    for symbol in SYMBOLS:
+    data_symbols = list(dict.fromkeys(SYMBOLS + list(state['open'].keys())))
+    for symbol in data_symbols:
         try:
             df = get_history(symbol, PERIOD, INTERVAL)
             if not df.empty:
@@ -411,7 +427,7 @@ def main() -> None:
         conf_mult = (confidence_size_multiplier(sig.prob_up, sig.dynamic_threshold)
                      if USE_CONFIDENCE_SIZING else 1.0)
         margin_usd, volume, size_note = size_trade(
-            usable_margin=remaining_margin,
+            usable_margin=usable_margin,
             position_fraction=POSITION_FRACTION,
             conf_mult=conf_mult,
             regime_mult=sig.regime_size_multiplier,
@@ -420,18 +436,27 @@ def main() -> None:
             min_volume=kp.min_volume,
             allow_min_bump=ALLOW_MIN_SIZE_BUMP,
         )
+        if margin_usd > remaining_margin:
+            margin_usd = remaining_margin
+            volume = (margin_usd * LEVERAGE) / current_price if current_price > 0 else 0.0
+            size_note = 'capped_to_remaining_margin'
 
         if margin_usd <= 0 or volume < kp.min_volume:
             min_margin = (kp.min_volume * current_price) / LEVERAGE if LEVERAGE > 0 else 0.0
             actions.append(
                 f"skip {symbol}: need >= ${min_margin:.2f} margin for min size "
                 f"{kp.min_volume} (have ${remaining_margin:.2f} remaining, "
-                f"target ${remaining_margin * POSITION_FRACTION:.2f})"
+                f"target ${usable_margin * POSITION_FRACTION:.2f})"
             )
             continue
         if size_note == 'bumped_to_exchange_min':
             actions.append(
                 f"size {symbol}: bumped to Kraken min "
+                f"(margin ${margin_usd:.2f}, vol={volume})"
+            )
+        elif size_note == 'capped_to_remaining_margin':
+            actions.append(
+                f"size {symbol}: capped to remaining margin "
                 f"(margin ${margin_usd:.2f}, vol={volume})"
             )
 

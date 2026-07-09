@@ -38,6 +38,7 @@ from ml_strategy import (
     build_cost_aware_labels,
     build_enhanced_features,
     compute_btc_regime_frame,
+    compute_strict_btc_bear_frame,
     dynamic_probability_threshold,
     estimate_payoff_stats,
     expected_value,
@@ -45,6 +46,7 @@ from ml_strategy import (
     passes_fng_filter,
     recent_volatility,
     relative_strength_7d,
+    strict_btc_bear_state,
 )
 
 
@@ -139,8 +141,20 @@ def backtest_symbol(
     ev_cost_multiplier: float = 1.5,
     entry_fee_rate: float | None = None,
     exit_fee_rate: float | None = None,
+    bear_policy: str | None = None,
+    regime_mode: str = 'default',
 ) -> dict:
-    """Run the walk-forward backtest for one coin and return its stats."""
+    """Run the walk-forward backtest for one coin and return its stats.
+
+    bear_policy (research):
+      None / ignored  - normal long/short thresholds (plus optional regime filter)
+      'cash'          - skip new entries while BTC is in bear/weak
+      'short'         - long-only outside bear; short-only inside bear
+
+    regime_mode (research):
+      'default' - existing weak/strong/neutral BTC classifier
+      'strict'  - sustained bear: below 200d EMA AND down >=10% over 8 weeks
+    """
     cost_model = cost_model or KrakenCostModel(
         maker_entry_fee=fee_rate,
         taker_entry_fee=fee_rate,
@@ -165,7 +179,12 @@ def backtest_symbol(
     high = data['High'].values
     low = data['Low'].values
     atr_all = compute_atr(data, atr_period).values if atr_stop_mult > 0 else None
-    btc_regimes = compute_btc_regime_frame(btc_data) if btc_data is not None else pd.DataFrame()
+    if btc_data is None:
+        btc_regimes = pd.DataFrame()
+    elif regime_mode == 'strict':
+        btc_regimes = compute_strict_btc_bear_frame(btc_data)
+    else:
+        btc_regimes = compute_btc_regime_frame(btc_data)
     rs_7d = relative_strength_7d(data, btc_data) if btc_data is not None else None
 
     n = len(data)
@@ -220,9 +239,17 @@ def backtest_symbol(
         dyn_thr = dynamic_probability_threshold(buy_thr, avg_win, avg_loss, estimated_cost)
         ev = expected_value(prob_up, avg_win, avg_loss, estimated_cost)
 
-        if use_btc_regime_filter and btc_data is not None:
-            regime = btc_regime_state(btc_regimes, data.index[i])
-            if regime.block_new_entries:
+        regime_name = 'unknown'
+        in_bear = False
+        if btc_data is not None and not btc_regimes.empty:
+            if regime_mode == 'strict':
+                regime = strict_btc_bear_state(btc_regimes, data.index[i])
+            else:
+                regime = btc_regime_state(btc_regimes, data.index[i])
+            regime_name = regime.regime
+            in_bear = regime.block_new_entries
+            # cash-in-bear: skip entries while BTC is in bear/weak
+            if (use_btc_regime_filter or bear_policy == 'cash') and in_bear:
                 i += 1
                 equity_curve.append(equity)
                 continue
@@ -238,13 +265,31 @@ def backtest_symbol(
         if use_expected_value_filter and not (
             prob_up > dyn_thr and ev > 0 and ev > ev_cost_multiplier * estimated_cost
         ):
-            i += 1
-            equity_curve.append(equity)
-            continue
+            # EV filter is long-edge oriented; for short-in-bear shorts, skip it.
+            if not (bear_policy == 'short' and in_bear):
+                i += 1
+                equity_curve.append(equity)
+                continue
 
-        if prob_up > dyn_thr:
+        if bear_policy == 'short':
+            # Non-bear: long only. Bear: short only.
+            if in_bear:
+                if sell_thr > 0 and prob_up < sell_thr:
+                    direction = 'short'
+                else:
+                    i += 1
+                    equity_curve.append(equity)
+                    continue
+            else:
+                if prob_up > dyn_thr:
+                    direction = 'long'
+                else:
+                    i += 1
+                    equity_curve.append(equity)
+                    continue
+        elif prob_up > dyn_thr:
             direction = 'long'
-        elif prob_up < sell_thr:
+        elif sell_thr > 0 and prob_up < sell_thr:
             direction = 'short'
         else:
             i += 1
@@ -287,6 +332,12 @@ def backtest_symbol(
                 if p < exit_thr:
                     exit_price, exit_idx, exit_reason = close[j], j, 'model_exit'
                     break
+            if exit_thr > 0 and direction == 'short' and valid_feat[j]:
+                # Bail on shorts if model flips back toward "up".
+                p = float(model.predict_proba(X_all[j:j + 1])[:, 1][0])
+                if p > (1.0 - exit_thr):
+                    exit_price, exit_idx, exit_reason = close[j], j, 'model_exit'
+                    break
 
         if direction == 'long':
             gross_pct = (exit_price - entry_price) / entry_price * 100 * leverage
@@ -312,6 +363,7 @@ def backtest_symbol(
         trades.append({
             'symbol': symbol,
             'direction': direction,
+            'btc_regime': regime_name,
             'prob_up': round(prob_up, 3),
             'dynamic_threshold': round(dyn_thr, 3),
             'expected_value': round(ev, 5),
